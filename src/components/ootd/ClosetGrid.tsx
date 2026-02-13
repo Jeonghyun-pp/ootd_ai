@@ -33,7 +33,7 @@ export default function ClosetGrid({
           <Shirt className="size-4 text-blue-600" />
         </div>
         <h3 className="text-sm font-semibold text-foreground/80">
-          @geonu 의 옷장
+          내 옷장
         </h3>
         <span className="text-xs text-muted-foreground bg-white/60 rounded-md px-2 py-0.5 border border-border/30">
           {items.length}벌
