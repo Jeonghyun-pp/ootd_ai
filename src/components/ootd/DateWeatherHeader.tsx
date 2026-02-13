@@ -53,13 +53,18 @@ export default function DateWeatherHeader() {
 
         const data = await response.json();
         
-        // API 응답 형식에 맞게 데이터 변환
+        // 에러 응답 처리
+        if (data.error) {
+          throw new Error(data.details || data.error);
+        }
+        
+        // API 응답 형식에 맞게 데이터 변환 (실시간 데이터)
         setWeatherData({
           location: data.location || location,
-          temperature: data.temperature || data.temp || 0,
-          feelsLike: data.feelsLike || data.feels_like || 0,
-          weather: data.weather || data.weatherMain || "Clear",
-          precipitation: data.precipitation || data.rain?.amount || 0.0,
+          temperature: data.temperature || 0,
+          feelsLike: data.feelsLike || 0,
+          weather: data.weather || "Clear",
+          precipitation: data.precipitation || 0.0,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : "날씨 정보를 불러올 수 없습니다.");
