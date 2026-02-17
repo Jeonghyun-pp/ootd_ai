@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { Shirt } from "lucide-react";
-import { type ClosetItem } from "@/lib/mock/closet";
+import { type ClosetItemView } from "@/lib/types/closet-view";
 import ClosetItemCard from "./ClosetItemCard";
 import ClosetItemDialog from "./ClosetItemDialog";
 
 interface ClosetGridProps {
-  items: ClosetItem[];
+  items: ClosetItemView[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
@@ -17,10 +17,10 @@ export default function ClosetGrid({
   selectedId,
   onSelect,
 }: ClosetGridProps) {
-  const [dialogItem, setDialogItem] = useState<ClosetItem | null>(null);
+  const [dialogItem, setDialogItem] = useState<ClosetItemView | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  function handleClick(item: ClosetItem) {
+  function handleClick(item: ClosetItemView) {
     onSelect(item.id);
     setDialogItem(item);
     setDialogOpen(true);

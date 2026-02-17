@@ -1,10 +1,10 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { type ClosetItem, getCategoryLabel } from "@/lib/mock/closet";
+import { type ClosetItemView, getCategoryLabel } from "@/lib/types/closet-view";
 
 interface ClosetItemCardProps {
-  item: ClosetItem;
+  item: ClosetItemView;
   selected: boolean;
   onClick: () => void;
 }
