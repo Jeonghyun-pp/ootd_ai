@@ -1,19 +1,56 @@
 "use client";
 
-import { mockClosetItems, type ClosetItem } from "@/lib/mock/closet";
+import { type ClosetItemView } from "@/lib/types/closet-view";
 import ClosetItemCard from "@/components/ootd/ClosetItemCard";
 import ClosetItemDialog from "@/components/ootd/ClosetItemDialog";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { Loader2 } from "lucide-react";
 
 export default function GallerySection() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dialogItem, setDialogItem] = useState<ClosetItem | null>(null);
+  const [dialogItem, setDialogItem] = useState<ClosetItemView | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  
-  // Show first 9 items for gallery
-  const galleryItems = mockClosetItems.slice(0, 9);
+  const [galleryItems, setGalleryItems] = useState<ClosetItemView[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  function handleClick(item: ClosetItem) {
+  useEffect(() => {
+    async function fetchItems() {
+      try {
+        const res = await fetch("/api/closet");
+        if (!res.ok) throw new Error("Failed to fetch");
+        const data = await res.json();
+
+        const views: ClosetItemView[] = data.items
+          .slice(0, 9)
+          .map((item: any) => ({
+            id: item.id,
+            name:
+              item.name ||
+              item.attributes?.sub_type ||
+              item.attributes?.category ||
+              "Unknown",
+            imageUrl: item.imageUrl,
+            category: item.attributes?.category || "top",
+            color: item.attributes?.color,
+            subType: item.attributes?.sub_type,
+            material: item.attributes?.material?.[0]?.value,
+            fit: item.attributes?.fit,
+            season: item.season,
+            tags: item.tags,
+            createdAt: item.createdAt,
+          }));
+
+        setGalleryItems(views);
+      } catch {
+        // Gallery is non-critical, fail silently
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchItems();
+  }, []);
+
+  function handleClick(item: ClosetItemView) {
     setSelectedId(item.id);
     setDialogItem(item);
     setDialogOpen(true);
@@ -34,16 +71,22 @@ export default function GallerySection() {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {galleryItems.map((item) => (
-            <ClosetItemCard
-              key={item.id}
-              item={item}
-              selected={selectedId === item.id}
-              onClick={() => handleClick(item)}
-            />
-          ))}
-        </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="size-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {galleryItems.map((item) => (
+              <ClosetItemCard
+                key={item.id}
+                item={item}
+                selected={selectedId === item.id}
+                onClick={() => handleClick(item)}
+              />
+            ))}
+          </div>
+        )}
 
         <div className="text-center mt-12">
           <button className="text-primary font-semibold hover:underline transition-colors">

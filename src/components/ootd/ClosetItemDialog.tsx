@@ -8,13 +8,13 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import {
-  type ClosetItem,
+  type ClosetItemView,
   getCategoryLabel,
   getSeasonLabel,
-} from "@/lib/mock/closet";
+} from "@/lib/types/closet-view";
 
 interface ClosetItemDialogProps {
-  item: ClosetItem | null;
+  item: ClosetItemView | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -53,6 +53,27 @@ export default function ClosetItemDialog({
               <>
                 <span className="text-muted-foreground font-medium">컬러</span>
                 <span className="font-semibold text-foreground">{item.color}</span>
+              </>
+            )}
+
+            {item.subType && (
+              <>
+                <span className="text-muted-foreground font-medium">유형</span>
+                <span className="font-semibold text-foreground">{item.subType}</span>
+              </>
+            )}
+
+            {item.material && (
+              <>
+                <span className="text-muted-foreground font-medium">소재</span>
+                <span className="font-semibold text-foreground">{item.material}</span>
+              </>
+            )}
+
+            {item.fit && (
+              <>
+                <span className="text-muted-foreground font-medium">핏</span>
+                <span className="font-semibold text-foreground">{item.fit}</span>
               </>
             )}
 

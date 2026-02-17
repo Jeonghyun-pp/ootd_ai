@@ -1,18 +1,17 @@
 "use client";
 
-import { ThumbsUp, ThumbsDown, Shirt, Sparkles } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 
-import type { ClosetItem } from "@/lib/mock/closet";
+import type { ClosetItemView } from "@/lib/types/closet-view";
 
 export type RecommendationItem = {
   id: string;
-  top: ClosetItem;
-  bottom: ClosetItem;
-  outer?: ClosetItem;
+  top: ClosetItemView;
+  bottom: ClosetItemView;
+  outer?: ClosetItemView;
   score: number; // 0.0 ~ 1.0
   reason: string;
 };

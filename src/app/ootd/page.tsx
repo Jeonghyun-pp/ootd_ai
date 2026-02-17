@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { RotateCcw, Wand2 } from "lucide-react";
+import { RotateCcw, Wand2, Loader2 } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,7 @@ import RecommendationResult, {
 } from "@/components/ootd/RecommendationResult";
 import Footer from "@/components/landing/Footer";
 
-import { mockClosetItems } from "@/lib/mock/closet";
+import type { ClosetItemView } from "@/lib/types/closet-view";
 
 export default function OotdPage() {
   const [moodText, setMoodText] = useState("");
@@ -33,10 +33,78 @@ export default function OotdPage() {
   >([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const selectedItem = useMemo(
-    () => mockClosetItems.find((i) => i.id === selectedClosetItemId) ?? null,
-    [selectedClosetItemId]
-  );
+  // 옷장 데이터 상태
+  const [closetItems, setClosetItems] = useState<ClosetItemView[]>([]);
+  const [closetLoading, setClosetLoading] = useState(true);
+  const [closetError, setClosetError] = useState<string | null>(null);
+
+  // 날씨 데이터 (추천 요청에 전달)
+  const [weather, setWeather] = useState<{
+    temperature?: number;
+    feelsLike?: number;
+    precipitation?: number;
+  }>({});
+
+  // 옷장 데이터 로드
+  const fetchCloset = useCallback(async () => {
+    try {
+      setClosetLoading(true);
+      setClosetError(null);
+      const res = await fetch("/api/closet");
+      if (!res.ok) throw new Error("옷장 데이터 로드 실패");
+      const data = await res.json();
+
+      // API 응답의 ClosetItem을 ClosetItemView로 변환
+      const views: ClosetItemView[] = data.items.map((item: any) => ({
+        id: item.id,
+        name:
+          item.name ||
+          item.attributes?.sub_type ||
+          item.attributes?.category ||
+          "Unknown",
+        imageUrl: item.imageUrl,
+        category: item.attributes?.category || "top",
+        color: item.attributes?.color,
+        subType: item.attributes?.sub_type,
+        material: item.attributes?.material?.[0]?.value,
+        fit: item.attributes?.fit,
+        season: item.season,
+        tags: item.tags,
+        createdAt: item.createdAt,
+      }));
+
+      setClosetItems(views);
+    } catch (err) {
+      console.error("Closet fetch error:", err);
+      setClosetError("옷장 데이터를 불러올 수 없습니다.");
+    } finally {
+      setClosetLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCloset();
+  }, [fetchCloset]);
+
+  // 날씨 데이터 로드
+  useEffect(() => {
+    async function fetchWeather() {
+      try {
+        const res = await fetch("/api/weather");
+        if (res.ok) {
+          const data = await res.json();
+          setWeather({
+            temperature: data.temperature,
+            feelsLike: data.feelsLike,
+            precipitation: data.precipitation,
+          });
+        }
+      } catch {
+        // 날씨 로드 실패는 무시
+      }
+    }
+    fetchWeather();
+  }, []);
 
   function handleUpload(file: File) {
     setOotdFile(file);
@@ -58,7 +126,7 @@ export default function OotdPage() {
     toast.info("초기화되었습니다.");
   }
 
-  function handleRecommend() {
+  async function handleRecommend() {
     if (moodText.length <= 2) {
       toast.warning("mood를 3자 이상 입력해주세요.");
       return;
@@ -67,42 +135,77 @@ export default function OotdPage() {
     setIsLoading(true);
     setRecommendationResults([]);
 
-    // 시뮬레이션: API 호출 시뮬레이션
-    setTimeout(() => {
-      // Mock 추천 결과 생성
-      const mockResults: RecommendationItem[] = [
-        {
-          id: "1",
-          top: mockClosetItems[0],
-          bottom: mockClosetItems[2],
-          outer: mockClosetItems[1],
-          score: 0.87,
-          reason: `${moodText} 스타일에 최적화된 조합입니다. 날씨와 상황을 고려한 세련된 코디입니다.`,
-        },
-        {
-          id: "2",
-          top: mockClosetItems[7],
-          bottom: mockClosetItems[4],
-          score: 0.82,
-          reason: `캐주얼하면서도 포멀한 느낌의 ${moodText} 룩입니다.`,
-        },
-        {
-          id: "3",
-          top: mockClosetItems[11],
-          bottom: mockClosetItems[3],
-          outer: mockClosetItems[4],
-          score: 0.79,
-          reason: `따뜻하고 편안한 ${moodText} 스타일입니다.`,
-        },
-      ];
+    try {
+      const res = await fetch("/api/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mood: moodText,
+          comment: commentText || undefined,
+          temperature: weather.temperature,
+          feelsLike: weather.feelsLike,
+          precipitation: weather.precipitation,
+        }),
+      });
 
-      setRecommendationResults(mockResults);
-      setIsLoading(false);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "추천 요청 실패");
+      }
+
+      const data = await res.json();
+
+      // API 응답을 RecommendationItem으로 변환
+      const results: RecommendationItem[] = (data.recommendations || []).map(
+        (rec: any) => ({
+          id: rec.id,
+          top: toView(rec.top),
+          bottom: toView(rec.bottom),
+          outer: rec.outer ? toView(rec.outer) : undefined,
+          score: rec.score,
+          reason: rec.reason,
+        })
+      );
+
+      setRecommendationResults(results);
       toast.success("코디 추천이 완료되었습니다!", {
-        description: `${mockResults.length}개의 코디를 추천했습니다.`,
+        description: `${results.length}개의 코디를 추천했습니다.`,
         duration: 3000,
       });
-    }, 2000);
+    } catch (err) {
+      console.error("Recommend error:", err);
+      toast.error("코디 추천에 실패했습니다.", {
+        description: err instanceof Error ? err.message : "다시 시도해주세요.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleUploadToCloset() {
+    if (!ootdFile) return;
+
+    try {
+      const formData = new FormData();
+      formData.append("image", ootdFile);
+
+      const res = await fetch("/api/closet/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "업로드 실패");
+      }
+
+      toast.success("옷장에 아이템이 추가되었습니다!");
+      handleRemoveImage();
+      fetchCloset(); // 옷장 새로고침
+    } catch (err) {
+      console.error("Upload error:", err);
+      toast.error("업로드에 실패했습니다.");
+    }
   }
 
   function handleFeedback(resultId: string, isPositive: boolean) {
@@ -113,7 +216,6 @@ export default function OotdPage() {
         duration: 2000,
       }
     );
-    // TODO: 실제 API 호출
   }
 
   return (
@@ -160,6 +262,18 @@ export default function OotdPage() {
                     onRemove={handleRemoveImage}
                   />
 
+                  {/* Upload to closet button */}
+                  {ootdFile && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full rounded-xl"
+                      onClick={handleUploadToCloset}
+                    >
+                      옷장에 추가하기
+                    </Button>
+                  )}
+
                   {/* [C] One-line Comment */}
                   <div className="space-y-2">
                     <label className="text-sm font-semibold text-foreground/80">
@@ -181,11 +295,32 @@ export default function OotdPage() {
 
                   {/* [E] Closet Grid */}
                   <div className="flex-1 overflow-y-auto max-h-[600px] pr-2">
-                    <ClosetGrid
-                      items={mockClosetItems}
-                      selectedId={selectedClosetItemId}
-                      onSelect={setSelectedClosetItemId}
-                    />
+                    {closetLoading ? (
+                      <div className="flex items-center justify-center py-12">
+                        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-sm text-muted-foreground">
+                          옷장 로딩 중...
+                        </span>
+                      </div>
+                    ) : closetError ? (
+                      <div className="text-center py-12">
+                        <p className="text-sm text-red-500">{closetError}</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                          onClick={fetchCloset}
+                        >
+                          다시 시도
+                        </Button>
+                      </div>
+                    ) : (
+                      <ClosetGrid
+                        items={closetItems}
+                        selectedId={selectedClosetItemId}
+                        onSelect={setSelectedClosetItemId}
+                      />
+                    )}
                   </div>
 
                   {/* [F] Action Buttons */}
@@ -233,4 +368,36 @@ export default function OotdPage() {
       <Footer />
     </div>
   );
+}
+
+/**
+ * API 응답 아이템을 ClosetItemView로 변환 (추천 결과용)
+ */
+function toView(item: any): ClosetItemView {
+  if (!item) {
+    return {
+      id: "unknown",
+      name: "Unknown",
+      imageUrl: "https://picsum.photos/400/500",
+      category: "top",
+      createdAt: new Date().toISOString().split("T")[0],
+    };
+  }
+  return {
+    id: item.id,
+    name:
+      item.name ||
+      item.attributes?.sub_type ||
+      item.attributes?.category ||
+      "Unknown",
+    imageUrl: item.imageUrl,
+    category: item.attributes?.category || "top",
+    color: item.attributes?.color,
+    subType: item.attributes?.sub_type,
+    material: item.attributes?.material?.[0]?.value,
+    fit: item.attributes?.fit,
+    season: item.season,
+    tags: item.tags,
+    createdAt: item.createdAt || new Date().toISOString().split("T")[0],
+  };
 }
