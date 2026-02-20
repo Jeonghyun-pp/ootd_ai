@@ -9,8 +9,10 @@ import type { ClosetItemView } from "@/lib/types/closet-view";
 
 export type RecommendationItem = {
   id: string;
-  top: ClosetItemView;
-  bottom: ClosetItemView;
+  type: "two_piece" | "dress";
+  top?: ClosetItemView;
+  bottom?: ClosetItemView;
+  dress?: ClosetItemView;
   outer?: ClosetItemView;
   score: number; // 0.0 ~ 1.0
   reason: string;
@@ -71,35 +73,46 @@ export default function RecommendationResult({
             className="overflow-hidden border-border/40 notion-shadow notion-hover group"
           >
             <CardContent className="p-0">
-              {/* 코디 이미지 그리드 */}
               <div className="grid grid-cols-2 gap-2 p-4 bg-gradient-to-br from-slate-50 to-blue-50/30">
-                {/* 상의 */}
-                <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={result.top.imageUrl}
-                    alt={result.top.name}
-                    className="h-full w-full object-cover"
-                  />
-                  <div className="absolute top-1 left-1 bg-blue-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-md font-medium">
-                    상의
+                {result.type === "dress" && result.dress ? (
+                  <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white col-span-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={result.dress.imageUrl}
+                      alt={result.dress.name}
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute top-1 left-1 bg-pink-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-md font-medium">
+                      원피스
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={result.top?.imageUrl || "https://picsum.photos/400/500"}
+                        alt={result.top?.name || "top"}
+                        className="h-full w-full object-cover"
+                      />
+                      <div className="absolute top-1 left-1 bg-blue-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-md font-medium">
+                        상의
+                      </div>
+                    </div>
+                    <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={result.bottom?.imageUrl || "https://picsum.photos/400/500"}
+                        alt={result.bottom?.name || "bottom"}
+                        className="h-full w-full object-cover"
+                      />
+                      <div className="absolute top-1 left-1 bg-purple-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-md font-medium">
+                        하의
+                      </div>
+                    </div>
+                  </>
+                )}
 
-                {/* 하의 */}
-                <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={result.bottom.imageUrl}
-                    alt={result.bottom.name}
-                    className="h-full w-full object-cover"
-                  />
-                  <div className="absolute top-1 left-1 bg-purple-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-md font-medium">
-                    하의
-                  </div>
-                </div>
-
-                {/* 아우터 (있는 경우) */}
                 {result.outer && (
                   <div className="relative aspect-square rounded-xl overflow-hidden border border-border/40 bg-white col-span-2">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -115,9 +128,7 @@ export default function RecommendationResult({
                 )}
               </div>
 
-              {/* 정보 영역 */}
               <div className="p-4 space-y-3">
-                {/* 매칭 점수 */}
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-muted-foreground">
                     매칭 점수
@@ -135,7 +146,6 @@ export default function RecommendationResult({
                   </div>
                 </div>
 
-                {/* 추천 이유 */}
                 <div className="space-y-1">
                   <span className="text-xs font-medium text-muted-foreground">
                     추천 이유
@@ -145,14 +155,21 @@ export default function RecommendationResult({
                   </p>
                 </div>
 
-                {/* 아이템 이름 */}
                 <div className="space-y-1 pt-2 border-t border-border/40">
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-medium">상의:</span> {result.top.name}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-medium">하의:</span> {result.bottom.name}
-                  </div>
+                  {result.type === "dress" && result.dress ? (
+                    <div className="text-xs text-muted-foreground">
+                      <span className="font-medium">원피스:</span> {result.dress.name}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="text-xs text-muted-foreground">
+                        <span className="font-medium">상의:</span> {result.top?.name}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        <span className="font-medium">하의:</span> {result.bottom?.name}
+                      </div>
+                    </>
+                  )}
                   {result.outer && (
                     <div className="text-xs text-muted-foreground">
                       <span className="font-medium">아우터:</span> {result.outer.name}
@@ -160,7 +177,6 @@ export default function RecommendationResult({
                   )}
                 </div>
 
-                {/* 피드백 버튼 */}
                 {onFeedback && (
                   <div className="flex gap-2 pt-2">
                     <Button
@@ -179,7 +195,7 @@ export default function RecommendationResult({
                       onClick={() => onFeedback(result.id, false)}
                     >
                       <ThumbsDown className="size-4" />
-                      싫어요
+                      별로예요
                     </Button>
                   </div>
                 )}

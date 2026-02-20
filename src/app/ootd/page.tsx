@@ -156,16 +156,32 @@ export default function OotdPage() {
       const data = await res.json();
 
       // API 응답을 RecommendationItem으로 변환
-      const results: RecommendationItem[] = (data.recommendations || []).map(
-        (rec: any) => ({
-          id: rec.id,
-          top: toView(rec.top),
-          bottom: toView(rec.bottom),
-          outer: rec.outer ? toView(rec.outer) : undefined,
-          score: rec.score,
-          reason: rec.reason,
+      const results: RecommendationItem[] = (data.recommendations || [])
+        .map((rec: any) => {
+          if (rec.type === "dress" && rec.dress) {
+            return {
+              id: rec.id,
+              type: "dress" as const,
+              dress: toView(rec.dress),
+              outer: rec.outer ? toView(rec.outer) : undefined,
+              score: rec.score,
+              reason: rec.reason,
+            };
+          }
+
+          if (!rec.top || !rec.bottom) return null;
+
+          return {
+            id: rec.id,
+            type: "two_piece" as const,
+            top: toView(rec.top),
+            bottom: toView(rec.bottom),
+            outer: rec.outer ? toView(rec.outer) : undefined,
+            score: rec.score,
+            reason: rec.reason,
+          };
         })
-      );
+        .filter((item: RecommendationItem | null): item is RecommendationItem => item !== null);
 
       setRecommendationResults(results);
       toast.success("코디 추천이 완료되었습니다!", {
