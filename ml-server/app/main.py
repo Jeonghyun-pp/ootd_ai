@@ -1,105 +1,103 @@
-"""
-FastAPI ML 서버 - 코디 추천 모델 서빙
-"""
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, List, Optional, Literal
+
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
-import torch
-from transformers import AutoTokenizer
-import numpy as np
-from model_loader import load_model
-from predictor import predict_outfit_score
+from pydantic import BaseModel, Field
+
+from .model_loader import ArtifactsBundle, load_artifacts
+from .predictor import recommend_outfits
+
 
 app = FastAPI(title="OOTD Recommendation API")
 
-# 모델 로드 (서버 시작 시)
-model = None
-tokenizer = None
+artifacts: Optional[ArtifactsBundle] = None
+
+
+class WeatherPayload(BaseModel):
+    temperature: float = 0.0
+    feels_like: float = 0.0
+    precipitation: float = 0.0
+
+
+class UserContextPayload(BaseModel):
+    text: str
+    comment: str = ""
+    weather: WeatherPayload
+
+
+class ClosetItemPayload(BaseModel):
+    id: str
+    vector: Optional[List[float]] = None
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    season: Optional[List[str]] = None
+
+
+class RecommendRequest(BaseModel):
+    user_context: UserContextPayload
+    closet_items: List[ClosetItemPayload]
+    top_k: int = 10
+
+
+class RecommendationRow(BaseModel):
+    outfit_type: Literal["two_piece", "dress"] = "two_piece"
+    top_id: Optional[str] = None
+    bottom_id: Optional[str] = None
+    dress_id: Optional[str] = None
+    outer_id: Optional[str] = None
+    score: float
+    reason: str
+
+
+class RecommendResponse(BaseModel):
+    recommendations: List[RecommendationRow]
+
 
 @app.on_event("startup")
-async def load_models():
-    global model, tokenizer
-    model = load_model("models/best_model.pt")
-    tokenizer = AutoTokenizer.from_pretrained("models/")
+async def startup_event() -> None:
+    global artifacts
+    artifacts_path = (
+        os.getenv("ARTIFACTS_PATH")
+        or os.getenv("MODEL_ARTIFACTS_PATH")
+        or None
+    )
+    artifacts = load_artifacts(artifacts_path=artifacts_path)
 
-class RecommendationRequest(BaseModel):
-    mood: str
-    comment: Optional[str] = ""
-    temperature: float
-    feels_like: float
-    precipitation: float
-    closet_items: List[dict]  # 옷장 아이템 리스트
 
-class RecommendationResponse(BaseModel):
-    recommendations: List[dict]  # 추천 결과
-    scores: List[float]
+@app.post("/recommend", response_model=RecommendResponse)
+async def recommend(request: RecommendRequest) -> RecommendResponse:
+    if artifacts is None:
+        raise HTTPException(status_code=500, detail="model artifacts not loaded")
 
-@app.post("/recommend", response_model=RecommendationResponse)
-async def recommend_outfit(request: RecommendationRequest):
-    """
-    코디 추천 API
-    
-    입력:
-    - mood: 추구미 텍스트
-    - comment: 코멘트
-    - temperature: 기온
-    - feels_like: 체감 온도
-    - precipitation: 강수량
-    - closet_items: 옷장 아이템 리스트
-    
-    출력:
-    - 추천된 코디 조합 및 점수
-    """
+    mood = request.user_context.text.strip()
+    if len(mood) < 2:
+        raise HTTPException(status_code=400, detail="text must be at least 2 characters")
+
     try:
-        # 모든 옷 조합 생성
-        tops = [item for item in request.closet_items if item['category'] == 'top']
-        bottoms = [item for item in request.closet_items if item['category'] == 'bottom']
-        outers = [item for item in request.closet_items if item['category'] == 'outer']
-        
-        recommendations = []
-        scores = []
-        
-        # 각 조합에 대해 점수 예측
-        for top in tops:
-            for bottom in bottoms:
-                for outer in (outers + [None]):  # 아우터는 선택적
-                    score = predict_outfit_score(
-                        model=model,
-                        tokenizer=tokenizer,
-                        mood=request.mood,
-                        comment=request.comment,
-                        temperature=request.temperature,
-                        feels_like=request.feels_like,
-                        precipitation=request.precipitation,
-                        top=top,
-                        bottom=bottom,
-                        outer=outer
-                    )
-                    
-                    recommendations.append({
-                        'top': top,
-                        'bottom': bottom,
-                        'outer': outer,
-                        'score': float(score)
-                    })
-                    scores.append(float(score))
-        
-        # 점수 순으로 정렬
-        sorted_indices = np.argsort(scores)[::-1]  # 내림차순
-        top_recommendations = [recommendations[i] for i in sorted_indices[:10]]  # Top 10
-        
-        return RecommendationResponse(
-            recommendations=top_recommendations,
-            scores=[r['score'] for r in top_recommendations]
+        rows = recommend_outfits(
+            bundle=artifacts,
+            mood=mood,
+            comment=request.user_context.comment or "",
+            temperature=float(request.user_context.weather.temperature or 0.0),
+            closet_items=[item.model_dump() for item in request.closet_items],
+            top_k=int(request.top_k or 10),
         )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return RecommendResponse(recommendations=rows)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "model_loaded": model is not None}
+async def health() -> Dict[str, Any]:
+    return {
+        "status": "healthy",
+        "model_loaded": artifacts is not None,
+        "feature_cols": artifacts.feature_cols if artifacts else [],
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
