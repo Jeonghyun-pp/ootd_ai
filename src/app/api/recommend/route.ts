@@ -18,6 +18,13 @@ type UIRecommendation = {
   reason: string;
 };
 
+type SelectedItemsByCategory = {
+  top: ClosetItem[];
+  bottom: ClosetItem[];
+  dress: ClosetItem[];
+  outer: ClosetItem[];
+};
+
 type MLRecommendationRow = {
   outfit_type?: "two_piece" | "dress";
   top_id?: string;
@@ -26,6 +33,11 @@ type MLRecommendationRow = {
   outer_id?: string | null;
   score: number;
   reason?: string;
+};
+
+type MLResult = {
+  selectedItems: SelectedItemsByCategory;
+  recommendations: UIRecommendation[];
 };
 
 /**
@@ -62,16 +74,22 @@ export async function POST(request: NextRequest) {
       allItems
     );
 
-    if (mlResult && mlResult.length > 0) {
-      return NextResponse.json({ recommendations: mlResult });
+    if (mlResult && mlResult.recommendations.length > 0) {
+      return NextResponse.json({
+        selectedItems: mlResult.selectedItems,
+        recommendations: mlResult.recommendations,
+      });
     }
 
-    const fallbackResults = generateFallbackRecommendations(
+    const fallback = generateFallbackRecommendations(
       mood,
       temperature,
       allItems
     );
-    return NextResponse.json({ recommendations: fallbackResults });
+    return NextResponse.json({
+      selectedItems: fallback.selectedItems,
+      recommendations: fallback.recommendations,
+    });
   } catch (error) {
     console.error("Recommendation API error:", error);
     return NextResponse.json(
@@ -91,7 +109,7 @@ async function tryMLRecommendation(
   feelsLike: number | undefined,
   precipitation: number | undefined,
   allItems: ClosetItem[]
-): Promise<UIRecommendation[] | null> {
+): Promise<MLResult | null> {
   try {
     // Optional narrowing. If vector services are unavailable, continue with all items.
     let candidateItems = allItems;
@@ -136,11 +154,39 @@ async function tryMLRecommendation(
     if (!response.ok) return null;
 
     const data = await response.json();
+
+    // Parse selected_items: map IDs back to full ClosetItem objects
+    const rawSelected: Record<string, string[]> = data?.selected_items || {};
+    const itemById = new Map(candidateItems.map((i) => [i.id, i]));
+
+    const partKeyMap: Record<string, keyof SelectedItemsByCategory> = {
+      "상의": "top",
+      "하의": "bottom",
+      "원피스": "dress",
+      "아우터": "outer",
+    };
+
+    const selectedItems: SelectedItemsByCategory = {
+      top: [],
+      bottom: [],
+      dress: [],
+      outer: [],
+    };
+
+    for (const [korPart, ids] of Object.entries(rawSelected)) {
+      const enKey = partKeyMap[korPart];
+      if (!enKey || !Array.isArray(ids)) continue;
+      selectedItems[enKey] = ids
+        .map((id) => itemById.get(id))
+        .filter((item): item is ClosetItem => item !== undefined);
+    }
+
+    // Parse recommendations
     const rows: MLRecommendationRow[] = Array.isArray(data?.recommendations)
       ? data.recommendations
       : [];
 
-    const mapped = rows
+    const recommendations = rows
       .map((rec, index): UIRecommendation | null => {
         const outfitType =
           rec.outfit_type === "dress" || rec.dress_id ? "dress" : "two_piece";
@@ -184,7 +230,7 @@ async function tryMLRecommendation(
       })
       .filter((row): row is UIRecommendation => row !== null);
 
-    return mapped;
+    return { selectedItems, recommendations };
   } catch (error) {
     console.warn("ML recommendation failed. Fallback will be used:", error);
     return null;
@@ -223,7 +269,7 @@ function generateFallbackRecommendations(
   mood: string,
   temperature: number | undefined,
   allItems: ClosetItem[]
-): UIRecommendation[] {
+): { selectedItems: SelectedItemsByCategory; recommendations: UIRecommendation[] } {
   const season = getSeasonFromTemperature(temperature);
 
   const seasonFiltered = allItems.filter(
@@ -233,23 +279,31 @@ function generateFallbackRecommendations(
       item.season.includes(season)
   );
 
-  const tops = seasonFiltered.filter((i) => i.attributes.category === "top");
-  const bottoms = seasonFiltered.filter(
-    (i) => i.attributes.category === "bottom"
-  );
-  const outers = seasonFiltered.filter((i) => i.attributes.category === "outer");
-  const dresses = seasonFiltered.filter((i) => i.attributes.category === "dress");
+  const K = 10;
+  const tops = seasonFiltered.filter((i) => i.attributes.category === "top").slice(0, K);
+  const bottoms = seasonFiltered
+    .filter((i) => i.attributes.category === "bottom")
+    .slice(0, K);
+  const outers = seasonFiltered.filter((i) => i.attributes.category === "outer").slice(0, K);
+  const dresses = seasonFiltered.filter((i) => i.attributes.category === "dress").slice(0, K);
+
+  const selectedItems: SelectedItemsByCategory = {
+    top: tops,
+    bottom: bottoms,
+    dress: dresses,
+    outer: outers,
+  };
 
   const recommendations: UIRecommendation[] = [];
   const needOuter = season === "fall" || season === "winter";
 
   if (tops.length > 0 && bottoms.length > 0) {
-    const maxCombinations = Math.min(3, tops.length * bottoms.length);
+    const maxCombinations = Math.min(10, tops.length * bottoms.length);
     for (let i = 0; i < maxCombinations; i++) {
       const top = tops[i % tops.length];
       const bottom = bottoms[Math.floor(i / tops.length) % bottoms.length];
       const outer = needOuter && outers.length > 0 ? outers[i % outers.length] : undefined;
-      const score = 0.6 + i * 0.08;
+      const score = 0.95 - i * 0.03;
 
       recommendations.push({
         id: `rec_${recommendations.length + 1}`,
@@ -257,24 +311,26 @@ function generateFallbackRecommendations(
         top,
         bottom,
         outer,
-        score: Math.min(0.95, Number(score.toFixed(2))),
+        score: Math.max(0.5, Number(score.toFixed(2))),
         reason: generateReason(mood, score),
       });
     }
   }
 
-  if (dresses.length > 0 && recommendations.length < 3) {
-    const dress = dresses[0];
-    const outer = needOuter && outers.length > 0 ? outers[0] : undefined;
-    const score = 0.68;
-    recommendations.push({
-      id: `rec_${recommendations.length + 1}`,
-      type: "dress",
-      dress,
-      outer,
-      score,
-      reason: `${mood} 분위기에 맞는 원피스 중심 코디입니다.`,
-    });
+  if (dresses.length > 0) {
+    for (let i = 0; i < Math.min(dresses.length, 3); i++) {
+      const dress = dresses[i];
+      const outer = needOuter && outers.length > 0 ? outers[i % outers.length] : undefined;
+      const score = 0.8 - i * 0.05;
+      recommendations.push({
+        id: `rec_${recommendations.length + 1}`,
+        type: "dress",
+        dress,
+        outer,
+        score: Number(score.toFixed(2)),
+        reason: `${mood} 분위기에 맞는 원피스 중심 코디입니다.`,
+      });
+    }
   }
 
   if (recommendations.length === 0 && allItems.length >= 2) {
@@ -289,7 +345,13 @@ function generateFallbackRecommendations(
     });
   }
 
-  return recommendations;
+  // Sort by score and take top 10
+  recommendations.sort((a, b) => b.score - a.score);
+
+  return {
+    selectedItems,
+    recommendations: recommendations.slice(0, 10),
+  };
 }
 
 function getSeasonFromTemperature(

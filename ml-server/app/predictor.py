@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 
+from .color_harmony import (
+    ItemColorInfo,
+    build_final_outfits,
+    build_inner_candidates,
+    build_top_bottom_sets,
+    describe_harmony,
+    resolve_item_lab,
+)
 from .model_loader import ArtifactsBundle, normalize_temp_range
 
 
@@ -170,6 +179,8 @@ class PreparedItem:
     part: str
     temp_range: Tuple[int, int]
     similarity: float = 0.0
+    lab: Optional[np.ndarray] = field(default=None, repr=False)
+    color_name: Optional[str] = None
 
 
 def _normalize_text(value: Any) -> Optional[str]:
@@ -267,15 +278,86 @@ def _similarity_to_score(similarity: float) -> float:
     return max(0.0, min(1.0, (similarity + 1.0) / 2.0))
 
 
-def _build_reason(mood: str, temperature: float, has_outer: bool, is_dress: bool) -> str:
-    base = f"{mood} 무드와 {temperature:.1f}°C 날씨를 반영한 조합입니다."
+def _build_reason(
+    mood: str,
+    temperature: float,
+    has_outer: bool,
+    is_dress: bool,
+    color_names: Optional[Dict[str, Optional[str]]] = None,
+    harmony_desc: Optional[str] = None,
+    color_score: float = 0.0,
+) -> str:
+    # --- color label (e.g. "네이비 상의와 베이지 하의") ---
+    cn = color_names or {}
+    _kr = _color_to_korean
+
     if is_dress:
-        if has_outer:
-            return f"{base} 원피스 중심에 아우터를 더해 밸런스를 맞췄습니다."
-        return f"{base} 원피스 단독 실루엣으로 간결하게 구성했습니다."
+        dress_c = _kr(cn.get("dress"))
+        if dress_c and has_outer:
+            item_desc = f"{dress_c} 원피스에 {_kr(cn.get('outer')) or ''} 아우터를 매치한"
+        elif dress_c:
+            item_desc = f"{dress_c} 원피스 중심의"
+        else:
+            item_desc = "원피스 중심의"
+    else:
+        top_c = _kr(cn.get("top"))
+        bot_c = _kr(cn.get("bottom"))
+        if top_c and bot_c:
+            item_desc = f"{top_c} 상의와 {bot_c} 하의를 조합한"
+        elif top_c:
+            item_desc = f"{top_c} 상의 중심의"
+        else:
+            item_desc = "상의/하의 중심의"
+
+    # --- harmony context ---
+    harmony_part = ""
+    if harmony_desc:
+        # 받침 여부에 따라 '이/가' 구분
+        last_char = harmony_desc[-1] if harmony_desc else ""
+        particle = "이" if _has_batchim(last_char) else "가"
+        harmony_part = f" {harmony_desc}{particle}"
+        if color_score >= 0.6:
+            harmony_part += " 돋보이는"
+        elif color_score >= 0.4:
+            harmony_part += " 어우러진"
+        else:
+            harmony_part += " 반영된"
+
+    # --- weather/outer context ---
     if has_outer:
-        return f"{base} 상의/하의에 아우터를 레이어드해 체감 온도에 대응했습니다."
-    return f"{base} 상의/하의 중심으로 가볍게 입기 좋은 구성입니다."
+        outer_c = _kr(cn.get("outer"))
+        outer_part = f" {outer_c} 아우터로" if outer_c else " 아우터로"
+        if temperature <= 10:
+            weather_part = f"{outer_part} 추위에 대응했습니다."
+        elif temperature <= 18:
+            weather_part = f"{outer_part} 쌀쌀한 날씨에 맞췄습니다."
+        else:
+            weather_part = f"{outer_part} 레이어드 포인트를 더했습니다."
+    else:
+        if temperature >= 25:
+            weather_part = " 더운 날씨에 가볍게 입기 좋은 구성입니다."
+        elif temperature >= 18:
+            weather_part = " 선선한 날씨에 딱 맞는 구성입니다."
+        else:
+            weather_part = " 간결하게 구성했습니다."
+
+    return f"{mood} 무드에 맞는 {item_desc}{harmony_part} 코디.{weather_part}"
+
+
+def _color_to_korean(name: Optional[str]) -> Optional[str]:
+    """Convert English color name to Korean for display."""
+    if not name:
+        return None
+    return COLOR_ALIASES.get(name.lower()) or name
+
+
+def _has_batchim(char: str) -> bool:
+    """Check if a Korean character has a final consonant (받침)."""
+    if not char or not ("\uac00" <= char <= "\ud7a3"):
+        # Non-Korean characters: assume batchim for safe '이' usage
+        return True
+    code = ord(char) - 0xAC00
+    return (code % 28) != 0
 
 
 def _add_scored_combo(
@@ -376,10 +458,16 @@ def _prepare_item_features(
     if temp_range is None:
         temp_range = _temp_range_from_seasons(item.get("season"))
 
+    # Resolve dominant LAB color from text attributes
+    color_raw = _normalize_text(pick("color", "색상"))
+    sub_color_raw = _normalize_text(pick("sub_color", "서브색상"))
+
     prepared = PreparedItem(
         item_id=item_id,
         part=part,
         temp_range=temp_range,
+        lab=resolve_item_lab(color_raw, sub_color_raw),
+        color_name=color_raw,
     )
     return prepared, feature_row
 
@@ -391,9 +479,11 @@ def recommend_outfits(
     temperature: float,
     closet_items: List[Dict[str, Any]],
     top_k: int = 10,
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
+    _empty = {"selected_items": {}, "recommendations": []}
+
     if not closet_items:
-        return []
+        return _empty
 
     query = f"{mood} {comment}".strip()
     if not query:
@@ -415,7 +505,7 @@ def recommend_outfits(
         prepared_items.append(prepared)
 
     if not prepared_items:
-        return []
+        return _empty
 
     item_embs = bundle.encode_items(feature_bucket)
     text_emb = bundle.encode_text(query)
@@ -443,127 +533,159 @@ def recommend_outfits(
     for part in TARGET_PARTS:
         part_ranked[part].sort(key=lambda x: x.similarity, reverse=True)
 
-    tops = part_ranked["상의"][:12]
-    bottoms = part_ranked["하의"][:12]
-    outers = part_ranked["아우터"][:6]
-    dresses = part_ranked["원피스"][:8]
+    # ===================================================================
+    # Step 1: Select top-K items per category (mood + weather filtered)
+    # ===================================================================
+    K = 10
+    tops = part_ranked["상의"][:K]
+    bottoms = part_ranked["하의"][:K]
+    outers = part_ranked["아우터"][:K]
+    dresses = part_ranked["원피스"][:K]
 
-    cold_weather = temperature <= 18.0
+    if not tops and not bottoms and not dresses:
+        return {"selected_items": {}, "recommendations": []}
 
-    # key = (outfit_type, primary_id, secondary_id, outer_id)
-    # two_piece: (two_piece, top_id, bottom_id, outer_id)
-    # dress:     (dress, dress_id, None, outer_id)
-    combos: Dict[Tuple[str, str, Optional[str], Optional[str]], Tuple[float, bool]] = {}
+    # Build color info and mood score lookup for color_harmony module
+    _default_lab = np.array([53.6, 0.0, 0.0], dtype=np.float32)
 
-    # top + bottom combinations
-    if tops and bottoms:
-        for top_item in tops:
-            for bottom_item in bottoms:
-                no_outer_score = 0.5 * top_item.similarity + 0.5 * bottom_item.similarity
-                if cold_weather:
-                    no_outer_score -= 0.03
-                _add_scored_combo(
-                    combos,
-                    ("two_piece", top_item.item_id, bottom_item.item_id, None),
-                    no_outer_score,
-                    False,
-                )
+    def _to_color_info(items: List[PreparedItem]) -> List[ItemColorInfo]:
+        return [
+            ItemColorInfo(
+                item_id=p.item_id,
+                part=p.part,
+                lab=p.lab if p.lab is not None else _default_lab,
+                similarity=p.similarity,
+            )
+            for p in items
+        ]
 
-                if outers:
-                    for outer_item in outers[:3]:
-                        layered_score = (
-                            0.4 * top_item.similarity
-                            + 0.4 * bottom_item.similarity
-                            + 0.2 * outer_item.similarity
-                            + 0.02
-                        )
-                        if not cold_weather:
-                            layered_score -= 0.01
-                        _add_scored_combo(
-                            combos,
-                            (
-                                "two_piece",
-                                top_item.item_id,
-                                bottom_item.item_id,
-                                outer_item.item_id,
-                            ),
-                            layered_score,
-                            False,
-                        )
+    top_colors = _to_color_info(tops)
+    bottom_colors = _to_color_info(bottoms)
+    dress_colors = _to_color_info(dresses)
+    outer_colors = _to_color_info(outers)
 
-    # dress combinations
-    for dress_item in dresses:
-        solo_score = dress_item.similarity + 0.01
-        if cold_weather:
-            solo_score -= 0.02
-        _add_scored_combo(
-            combos,
-            ("dress", dress_item.item_id, None, None),
-            solo_score,
-            True,
-        )
+    # Mood similarity lookup (item_id -> similarity)
+    mood_scores: Dict[str, float] = {}
+    for p in tops + bottoms + outers + dresses:
+        mood_scores[p.item_id] = p.similarity
 
-        if outers:
-            for outer_item in outers[:3]:
-                layered_score = (
-                    0.75 * dress_item.similarity + 0.25 * outer_item.similarity + 0.02
-                )
-                _add_scored_combo(
-                    combos,
-                    ("dress", dress_item.item_id, None, outer_item.item_id),
-                    layered_score,
-                    True,
-                )
+    # Color index (item_id -> ItemColorInfo)
+    color_index: Dict[str, ItemColorInfo] = {}
+    for ic in top_colors + bottom_colors + dress_colors + outer_colors:
+        color_index[ic.item_id] = ic
 
-    if not combos:
-        return []
+    # ===================================================================
+    # Step 2: Color-based top/bottom set matching
+    # ===================================================================
+    L = 15
+    tb_sets = build_top_bottom_sets(top_colors, bottom_colors, L=L)
 
-    ranked = sorted(
-        combos.items(),
-        key=lambda kv: kv[1][0],
-        reverse=True,
-    )[: max(1, min(int(top_k), 30))]
+    # ===================================================================
+    # Step 3: Build inner candidates (dresses + top/bottom sets)
+    # ===================================================================
+    inner_candidates = build_inner_candidates(dress_colors, tb_sets)
+
+    # Step 1 selected items (expose to API for UI display)
+    selected_items: Dict[str, List[str]] = {
+        "상의": [p.item_id for p in tops],
+        "하의": [p.item_id for p in bottoms],
+        "원피스": [p.item_id for p in dresses],
+        "아우터": [p.item_id for p in outers],
+    }
+
+    if not inner_candidates:
+        return {"selected_items": selected_items, "recommendations": []}
+
+    # ===================================================================
+    # Step 4: Outer x Inner combination -> top M outfits
+    # ===================================================================
+    M = max(1, min(int(top_k), 30))
+    final_outfits = build_final_outfits(
+        outers=outer_colors,
+        inner_candidates=inner_candidates,
+        color_index=color_index,
+        mood_scores=mood_scores,
+        M=M,
+        temperature=temperature,
+    )
+
+    # ===================================================================
+    # Format results (same RecommendationRow interface)
+    # ===================================================================
+    mood_label = mood.strip() or "입력한"
+
+    # Build color_name lookup (item_id -> raw color string)
+    color_name_map: Dict[str, Optional[str]] = {}
+    for p in tops + bottoms + outers + dresses:
+        color_name_map[p.item_id] = p.color_name
 
     results: List[Dict[str, Any]] = []
-    for (
-        outfit_type,
-        primary_id,
-        secondary_id,
-        outer_id,
-    ), (raw_score, is_dress) in ranked:
-        score = _similarity_to_score(raw_score)
-        if outfit_type == "dress":
+
+    for fo in final_outfits:
+        raw_score = _similarity_to_score(fo.score)
+
+        # Gather color names for this outfit
+        cn: Dict[str, Optional[str]] = {}
+        if fo.outer_id:
+            cn["outer"] = color_name_map.get(fo.outer_id)
+
+        # Compute harmony description between key items
+        harmony_desc: Optional[str] = None
+        color_score = 0.0
+
+        if fo.inner.kind == "dress":
+            cn["dress"] = color_name_map.get(fo.inner.ids[0])
+            dress_ci = color_index.get(fo.inner.ids[0])
+            outer_ci = color_index.get(fo.outer_id) if fo.outer_id else None
+            if dress_ci and outer_ci:
+                harmony_desc = describe_harmony(dress_ci.lab, outer_ci.lab)
+                from .color_harmony import harmony_score_lab
+                color_score = harmony_score_lab(dress_ci.lab, outer_ci.lab)
+
             results.append(
                 {
                     "outfit_type": "dress",
-                    "dress_id": primary_id,
-                    "outer_id": outer_id,
-                    "score": round(score, 4),
+                    "dress_id": fo.inner.ids[0],
+                    "outer_id": fo.outer_id,
+                    "score": round(raw_score, 4),
                     "reason": _build_reason(
-                        mood=mood.strip() or "입력한",
+                        mood=mood_label,
                         temperature=temperature,
-                        has_outer=outer_id is not None,
+                        has_outer=fo.outer_id is not None,
                         is_dress=True,
+                        color_names=cn,
+                        harmony_desc=harmony_desc,
+                        color_score=color_score,
                     ),
                 }
             )
-        else:
-            if secondary_id is None:
-                continue
+        else:  # two_piece
+            cn["top"] = color_name_map.get(fo.inner.ids[0])
+            cn["bottom"] = color_name_map.get(fo.inner.ids[1])
+            top_ci = color_index.get(fo.inner.ids[0])
+            bot_ci = color_index.get(fo.inner.ids[1])
+            if top_ci and bot_ci:
+                harmony_desc = describe_harmony(top_ci.lab, bot_ci.lab)
+                from .color_harmony import harmony_score_lab
+                color_score = harmony_score_lab(top_ci.lab, bot_ci.lab)
+
             results.append(
                 {
                     "outfit_type": "two_piece",
-                    "top_id": primary_id,
-                    "bottom_id": secondary_id,
-                    "outer_id": outer_id,
-                    "score": round(score, 4),
+                    "top_id": fo.inner.ids[0],
+                    "bottom_id": fo.inner.ids[1],
+                    "outer_id": fo.outer_id,
+                    "score": round(raw_score, 4),
                     "reason": _build_reason(
-                        mood=mood.strip() or "입력한",
+                        mood=mood_label,
                         temperature=temperature,
-                        has_outer=outer_id is not None,
-                        is_dress=is_dress,
+                        has_outer=fo.outer_id is not None,
+                        is_dress=False,
+                        color_names=cn,
+                        harmony_desc=harmony_desc,
+                        color_score=color_score,
                     ),
                 }
             )
 
-    return results
+    return {"selected_items": selected_items, "recommendations": results}

@@ -7,6 +7,7 @@ CREATE TABLE closet_items (
 
   -- 이미지 정보
   image_url TEXT NOT NULL,
+  image_id VARCHAR(100),    -- CSV image_id (원본 파일명 매핑)
   image_vector vector(512), -- CLIP 이미지 벡터 (pgvector)
 
   -- 속성 정보 (dummy.json 구조 반영)
@@ -51,6 +52,7 @@ CREATE TABLE closet_items (
 -- 인덱스 생성
 CREATE INDEX idx_closet_items_category ON closet_items(category);
 CREATE INDEX idx_closet_items_created_at ON closet_items(created_at DESC);
+CREATE INDEX idx_closet_items_image_id ON closet_items(image_id);
 
 -- pgvector 코사인 유사도 검색 인덱스
 CREATE INDEX idx_closet_items_vector ON closet_items

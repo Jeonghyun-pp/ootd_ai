@@ -13,6 +13,7 @@ export interface ClosetRepository {
   delete(id: string): Promise<void>;
   updateVector(id: string, vector: number[]): Promise<void>;
   findSimilar(vector: number[], topK: number): Promise<ClosetItem[]>;
+  findByImageId(imageId: string): Promise<ClosetItem | null>;
 }
 
 /**
@@ -70,6 +71,11 @@ export class InMemoryClosetRepository implements ClosetRepository {
       item.imageVector = vector;
       this.items.set(id, item);
     }
+  }
+
+  async findByImageId(imageId: string): Promise<ClosetItem | null> {
+    const allItems = await this.findAll();
+    return allItems.find((item) => item.imageId === imageId) || null;
   }
 
   async findSimilar(vector: number[], topK: number): Promise<ClosetItem[]> {

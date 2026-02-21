@@ -1,10 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Shirt } from "lucide-react";
-import { type ClosetItemView } from "@/lib/types/closet-view";
+import { type ClosetItemView, getCategoryLabel } from "@/lib/types/closet-view";
 import ClosetItemCard from "./ClosetItemCard";
 import ClosetItemDialog from "./ClosetItemDialog";
+
+const CATEGORY_FILTERS = [
+  { key: "all", label: "전체" },
+  { key: "top", label: "상의" },
+  { key: "bottom", label: "하의" },
+  { key: "outer", label: "아우터" },
+  { key: "dress", label: "원피스" },
+] as const;
+
+const PAGE_SIZE = 30;
 
 interface ClosetGridProps {
   items: ClosetItemView[];
@@ -19,12 +29,36 @@ export default function ClosetGrid({
 }: ClosetGridProps) {
   const [dialogItem, setDialogItem] = useState<ClosetItemView | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<string>("all");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  const filtered = useMemo(() => {
+    if (activeCategory === "all") return items;
+    return items.filter((item) => item.category === activeCategory);
+  }, [items, activeCategory]);
+
+  const visible = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
 
   function handleClick(item: ClosetItemView) {
     onSelect(item.id);
     setDialogItem(item);
     setDialogOpen(true);
   }
+
+  function handleCategoryChange(key: string) {
+    setActiveCategory(key);
+    setVisibleCount(PAGE_SIZE);
+  }
+
+  // 카테고리별 개수
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: items.length };
+    for (const item of items) {
+      counts[item.category] = (counts[item.category] || 0) + 1;
+    }
+    return counts;
+  }, [items]);
 
   return (
     <div className="space-y-4">
@@ -40,8 +74,29 @@ export default function ClosetGrid({
         </span>
       </div>
 
+      {/* 카테고리 필터 탭 */}
+      <div className="flex gap-2 flex-wrap">
+        {CATEGORY_FILTERS.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => handleCategoryChange(key)}
+            className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${
+              activeCategory === key
+                ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                : "bg-white text-muted-foreground border-border/40 hover:border-border hover:bg-slate-50"
+            }`}
+          >
+            {label}
+            <span className="ml-1 opacity-70">
+              {categoryCounts[key] || 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* 아이템 그리드 */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {items.map((item) => (
+        {visible.map((item) => (
           <ClosetItemCard
             key={item.id}
             item={item}
@@ -50,6 +105,16 @@ export default function ClosetGrid({
           />
         ))}
       </div>
+
+      {/* 더보기 버튼 */}
+      {hasMore && (
+        <button
+          onClick={() => setVisibleCount((prev) => prev + PAGE_SIZE)}
+          className="w-full py-2.5 text-sm text-muted-foreground hover:text-foreground bg-white hover:bg-slate-50 border border-border/40 rounded-xl transition-all"
+        >
+          더보기 ({filtered.length - visibleCount}개 남음)
+        </button>
+      )}
 
       <ClosetItemDialog
         item={dialogItem}

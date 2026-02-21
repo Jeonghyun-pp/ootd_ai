@@ -53,6 +53,7 @@ export type ClosetItem = {
 
   // 이미지 정보
   imageUrl: string;
+  imageId?: string;        // CSV의 image_id (원본 파일명 매핑)
   imageVector?: number[]; // CLIP 이미지 벡터 (사전 계산)
 
   // 속성 정보 (dummy.json에서 추출)
