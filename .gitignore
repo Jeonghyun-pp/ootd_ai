@@ -33,9 +33,17 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# bulk upload data (이미지 파일은 git에 올리지 않음)
+/data/images/
+
+# python
+__pycache__/
+*.pyc
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.env*.local

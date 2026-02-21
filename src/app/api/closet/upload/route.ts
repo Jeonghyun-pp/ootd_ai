@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { v2 as cloudinary } from "cloudinary";
 import { getRepository } from "@/lib/db/repository";
 import type { ClosetItemAttributes } from "@/lib/types/closet";
 
 const repository = getRepository();
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const IMAGE_ANALYSIS_MODEL_URL =
   process.env.IMAGE_ANALYSIS_MODEL_URL || "http://localhost:8001";
@@ -15,7 +21,7 @@ const CLIP_MODEL_URL =
  * 이미지 업로드 및 아이템 등록
  *
  * 흐름:
- * 1. Vercel Blob에 이미지 업로드
+ * 1. Cloudinary에 이미지 업로드
  * 2. ML 분석 서버 호출 (fallback: 기본 attributes)
  * 3. PostgreSQL에 아이템 저장
  * 4. CLIP 벡터 인코딩 (non-blocking, best-effort)
@@ -32,8 +38,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Vercel Blob에 이미지 업로드
-    const imageUrl = await uploadImageToBlob(file);
+    // 1. Cloudinary에 이미지 업로드
+    const imageUrl = await uploadImageToCloudinary(file);
 
     // 2. ML 분석 서버 호출 (fallback 포함)
     const attributes = await analyzeImage(file);
@@ -80,19 +86,23 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Vercel Blob에 이미지 업로드
+ * Cloudinary에 이미지 업로드
  */
-async function uploadImageToBlob(file: File): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    // Blob 토큰 없으면 placeholder URL 반환
-    console.warn("BLOB_READ_WRITE_TOKEN이 없습니다. placeholder URL을 사용합니다.");
+async function uploadImageToCloudinary(file: File): Promise<string> {
+  if (!process.env.CLOUDINARY_CLOUD_NAME) {
+    console.warn("CLOUDINARY 설정이 없습니다. placeholder URL을 사용합니다.");
     return `https://picsum.photos/seed/${Date.now()}/400/500`;
   }
 
-  const blob = await put(`closet/${Date.now()}-${file.name}`, file, {
-    access: "public",
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const base64 = `data:${file.type};base64,${buffer.toString("base64")}`;
+
+  const result = await cloudinary.uploader.upload(base64, {
+    folder: "closet",
+    public_id: `${Date.now()}-${file.name.replace(/\.[^.]+$/, "")}`,
   });
-  return blob.url;
+
+  return result.secure_url;
 }
 
 /**

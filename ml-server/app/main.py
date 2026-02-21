@@ -32,6 +32,7 @@ class ClosetItemPayload(BaseModel):
     vector: Optional[List[float]] = None
     attributes: Dict[str, Any] = Field(default_factory=dict)
     season: Optional[List[str]] = None
+    dominant_color_lab: Optional[List[float]] = None  # Phase 2: pre-computed LAB
 
 
 class RecommendRequest(BaseModel):
@@ -51,6 +52,7 @@ class RecommendationRow(BaseModel):
 
 
 class RecommendResponse(BaseModel):
+    selected_items: Dict[str, List[str]] = Field(default_factory=dict)
     recommendations: List[RecommendationRow]
 
 
@@ -75,7 +77,7 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
         raise HTTPException(status_code=400, detail="text must be at least 2 characters")
 
     try:
-        rows = recommend_outfits(
+        result = recommend_outfits(
             bundle=artifacts,
             mood=mood,
             comment=request.user_context.comment or "",
@@ -83,7 +85,10 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
             closet_items=[item.model_dump() for item in request.closet_items],
             top_k=int(request.top_k or 10),
         )
-        return RecommendResponse(recommendations=rows)
+        return RecommendResponse(
+            selected_items=result.get("selected_items", {}),
+            recommendations=result.get("recommendations", []),
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -100,4 +105,5 @@ async def health() -> Dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

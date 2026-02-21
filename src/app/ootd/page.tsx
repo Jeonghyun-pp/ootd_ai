@@ -13,12 +13,20 @@ import DateWeatherHeader from "@/components/ootd/DateWeatherHeader";
 import OotdUploadCard from "@/components/ootd/OotdUploadCard";
 import MoodInput from "@/components/ootd/MoodInput";
 import ClosetGrid from "@/components/ootd/ClosetGrid";
+import SelectedItemsGrid from "@/components/ootd/SelectedItemsGrid";
 import RecommendationResult, {
   type RecommendationItem,
 } from "@/components/ootd/RecommendationResult";
 import Footer from "@/components/landing/Footer";
 
 import type { ClosetItemView } from "@/lib/types/closet-view";
+
+type SelectedItemsByCategory = {
+  top: ClosetItemView[];
+  bottom: ClosetItemView[];
+  dress: ClosetItemView[];
+  outer: ClosetItemView[];
+};
 
 export default function OotdPage() {
   const [moodText, setMoodText] = useState("");
@@ -31,6 +39,8 @@ export default function OotdPage() {
   const [recommendationResults, setRecommendationResults] = useState<
     RecommendationItem[]
   >([]);
+  const [selectedItems, setSelectedItems] =
+    useState<SelectedItemsByCategory | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // 옷장 데이터 상태
@@ -123,6 +133,7 @@ export default function OotdPage() {
     setCommentText("");
     setSelectedClosetItemId(null);
     setRecommendationResults([]);
+    setSelectedItems(null);
     toast.info("초기화되었습니다.");
   }
 
@@ -134,6 +145,7 @@ export default function OotdPage() {
 
     setIsLoading(true);
     setRecommendationResults([]);
+    setSelectedItems(null);
 
     try {
       const res = await fetch("/api/recommend", {
@@ -182,6 +194,17 @@ export default function OotdPage() {
           };
         })
         .filter((item: RecommendationItem | null): item is RecommendationItem => item !== null);
+
+      // Parse selected items (Step 1 results)
+      if (data.selectedItems) {
+        const si = data.selectedItems;
+        setSelectedItems({
+          top: (si.top || []).map(toView),
+          bottom: (si.bottom || []).map(toView),
+          dress: (si.dress || []).map(toView),
+          outer: (si.outer || []).map(toView),
+        });
+      }
 
       setRecommendationResults(results);
       toast.success("코디 추천이 완료되었습니다!", {
@@ -366,7 +389,16 @@ export default function OotdPage() {
             </CardContent>
           </Card>
 
-          {/* 추천 결과 영역 */}
+          {/* AI 선정 아이템 영역 (Step 1) */}
+          {selectedItems && (
+            <Card className="overflow-hidden border-border/40 notion-shadow-xl backdrop-blur-sm bg-white/90 relative z-10 mb-8">
+              <CardContent className="p-8">
+                <SelectedItemsGrid items={selectedItems} />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 추천 결과 영역 (Step 4 최종 코디) */}
           {(isLoading || recommendationResults.length > 0) && (
             <Card className="overflow-hidden border-border/40 notion-shadow-xl backdrop-blur-sm bg-white/90 relative z-10">
               <CardContent className="p-8">

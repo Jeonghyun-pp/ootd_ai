@@ -41,7 +41,7 @@ export class PostgresClosetRepository implements ClosetRepository {
     const attrs = item.attributes;
     const rows = await this.sql`
       INSERT INTO closet_items (
-        image_url, category, detection_confidence,
+        image_url, image_id, category, detection_confidence,
         sub_type, sub_type_confidence,
         color, color_confidence, sub_color, sub_color_confidence,
         sleeve_length, sleeve_length_confidence,
@@ -52,6 +52,7 @@ export class PostgresClosetRepository implements ClosetRepository {
         name, tags, season
       ) VALUES (
         ${item.imageUrl},
+        ${item.imageId ?? null},
         ${attrs.category},
         ${attrs.detection_confidence},
         ${attrs.sub_type ?? null},
@@ -139,6 +140,13 @@ export class PostgresClosetRepository implements ClosetRepository {
     `;
   }
 
+  async findByImageId(imageId: string): Promise<ClosetItem | null> {
+    const rows = await this.sql`
+      SELECT * FROM closet_items WHERE image_id = ${imageId}
+    `;
+    return rows.length > 0 ? rowToClosetItem(rows[0]) : null;
+  }
+
   async findSimilar(
     vector: number[],
     topK: number
@@ -184,6 +192,7 @@ function rowToClosetItem(row: Record<string, unknown>): ClosetItem {
   return {
     id: row.id as string,
     imageUrl: row.image_url as string,
+    imageId: (row.image_id as string) || undefined,
     attributes,
     name: row.name as string | undefined,
     tags: row.tags as string[] | undefined,
