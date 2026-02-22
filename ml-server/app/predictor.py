@@ -8,11 +8,16 @@ import torch
 
 from .color_harmony import (
     ItemColorInfo,
-    build_final_outfits,
     build_inner_candidates,
-    build_top_bottom_sets,
     describe_harmony,
+    harmony_score_lab,
     resolve_item_lab,
+)
+from .match_harmony import (
+    build_emb_by_id,
+    build_top_bottom_sets_with_emb,
+    build_final_outfits_with_match,
+    apply_mmr_reranking,
 )
 from .model_loader import ArtifactsBundle, normalize_temp_range
 
@@ -509,6 +514,7 @@ def recommend_outfits(
 
     item_embs = bundle.encode_items(feature_bucket)
     text_emb = bundle.encode_text(query)
+    emb_by_id = build_emb_by_id(item_embs, item_ids=[p.item_id for p in prepared_items])
 
     similarities = (text_emb @ item_embs.T).squeeze(0)
     for idx, prepared in enumerate(prepared_items):
@@ -536,7 +542,7 @@ def recommend_outfits(
     # ===================================================================
     # Step 1: Select top-K items per category (mood + weather filtered)
     # ===================================================================
-    K = 10
+    K = 7
     tops = part_ranked["상의"][:K]
     bottoms = part_ranked["하의"][:K]
     outers = part_ranked["아우터"][:K]
@@ -577,8 +583,8 @@ def recommend_outfits(
     # ===================================================================
     # Step 2: Color-based top/bottom set matching
     # ===================================================================
-    L = 15
-    tb_sets = build_top_bottom_sets(top_colors, bottom_colors, L=L)
+    L = 7
+    tb_sets = build_top_bottom_sets_with_emb(top_colors, bottom_colors, emb_by_id=emb_by_id, L=L)
 
     # ===================================================================
     # Step 3: Build inner candidates (dresses + top/bottom sets)
@@ -600,14 +606,14 @@ def recommend_outfits(
     # Step 4: Outer x Inner combination -> top M outfits
     # ===================================================================
     M = max(1, min(int(top_k), 30))
-    final_outfits = build_final_outfits(
-        outers=outer_colors,
+    final_outfits = build_final_outfits_with_match(
+        outer_colors=outer_colors,
         inner_candidates=inner_candidates,
         color_index=color_index,
-        mood_scores=mood_scores,
+        emb_by_id=emb_by_id,
         M=M,
-        temperature=temperature,
     )
+    final_outfits = apply_mmr_reranking(final_outfits, M=M)
 
     # ===================================================================
     # Format results (same RecommendationRow interface)
@@ -639,7 +645,6 @@ def recommend_outfits(
             outer_ci = color_index.get(fo.outer_id) if fo.outer_id else None
             if dress_ci and outer_ci:
                 harmony_desc = describe_harmony(dress_ci.lab, outer_ci.lab)
-                from .color_harmony import harmony_score_lab
                 color_score = harmony_score_lab(dress_ci.lab, outer_ci.lab)
 
             results.append(
@@ -666,7 +671,6 @@ def recommend_outfits(
             bot_ci = color_index.get(fo.inner.ids[1])
             if top_ci and bot_ci:
                 harmony_desc = describe_harmony(top_ci.lab, bot_ci.lab)
-                from .color_harmony import harmony_score_lab
                 color_score = harmony_score_lab(top_ci.lab, bot_ci.lab)
 
             results.append(
