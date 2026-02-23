@@ -42,6 +42,7 @@ export default function OotdPage() {
   const [selectedItems, setSelectedItems] =
     useState<SelectedItemsByCategory | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [recommendationId, setRecommendationId] = useState<string | null>(null);
 
   // 옷장 데이터 상태
   const [closetItems, setClosetItems] = useState<ClosetItemView[]>([]);
@@ -134,6 +135,7 @@ export default function OotdPage() {
     setSelectedClosetItemId(null);
     setRecommendationResults([]);
     setSelectedItems(null);
+    setRecommendationId(null);
     toast.info("초기화되었습니다.");
   }
 
@@ -206,6 +208,7 @@ export default function OotdPage() {
         });
       }
 
+      setRecommendationId(data.recommendation_id || null);
       setRecommendationResults(results);
       toast.success("코디 추천이 완료되었습니다!", {
         description: `${results.length}개의 코디를 추천했습니다.`,
@@ -247,14 +250,28 @@ export default function OotdPage() {
     }
   }
 
-  function handleFeedback(resultId: string, isPositive: boolean) {
-    toast.success(
-      isPositive ? "피드백 감사합니다!" : "피드백이 반영되었습니다.",
-      {
-        description: "다음 추천에 반영하겠습니다.",
-        duration: 2000,
-      }
-    );
+  async function handleFeedback(_resultId: string, isPositive: boolean) {
+    if (!recommendationId) {
+      toast.warning("추천 ID가 없어 피드백을 저장할 수 없습니다.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recommendation_id: recommendationId,
+          liked: isPositive,
+        }),
+      });
+      if (!res.ok) throw new Error("피드백 저장 실패");
+      toast.success(
+        isPositive ? "피드백 감사합니다!" : "피드백이 반영되었습니다.",
+        { description: "다음 추천에 반영하겠습니다.", duration: 2000 }
+      );
+    } catch {
+      toast.error("피드백 저장에 실패했습니다.");
+    }
   }
 
   return (
