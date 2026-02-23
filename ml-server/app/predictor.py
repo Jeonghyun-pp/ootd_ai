@@ -484,6 +484,11 @@ def recommend_outfits(
     temperature: float,
     closet_items: List[Dict[str, Any]],
     top_k: int = 10,
+    alpha_tb: float = 0.65,
+    alpha_oi: float = 0.70,
+    mmr_lambda: float = 0.75,
+    beta_tb: float = 0.50,
+    lambda_tbset: float = 0.15,
 ) -> Dict[str, Any]:
     _empty = {"selected_items": {}, "recommendations": []}
 
@@ -584,7 +589,7 @@ def recommend_outfits(
     # Step 2: Color-based top/bottom set matching
     # ===================================================================
     L = 7
-    tb_sets = build_top_bottom_sets_with_emb(top_colors, bottom_colors, emb_by_id=emb_by_id, L=L)
+    tb_sets = build_top_bottom_sets_with_emb(top_colors, bottom_colors, emb_by_id=emb_by_id, L=L, alpha_tb=alpha_tb)
 
     # ===================================================================
     # Step 3: Build inner candidates (dresses + top/bottom sets)
@@ -612,8 +617,11 @@ def recommend_outfits(
         color_index=color_index,
         emb_by_id=emb_by_id,
         M=M,
+        alpha_oi=alpha_oi,
+        beta_tb=beta_tb,
+        lambda_tbset=lambda_tbset,
     )
-    final_outfits = apply_mmr_reranking(final_outfits, M=M)
+    final_outfits = apply_mmr_reranking(final_outfits, M=M, lamb=mmr_lambda)
 
     # ===================================================================
     # Format results (same RecommendationRow interface)

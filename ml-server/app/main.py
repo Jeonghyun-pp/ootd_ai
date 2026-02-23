@@ -39,6 +39,12 @@ class RecommendRequest(BaseModel):
     user_context: UserContextPayload
     closet_items: List[ClosetItemPayload]
     top_k: int = 10
+    # 하이퍼파라미터 (기본값 = 학습 시작 기준점)
+    alpha_tb: float = 0.65
+    alpha_oi: float = 0.70
+    mmr_lambda: float = 0.75
+    beta_tb: float = 0.50
+    lambda_tbset: float = 0.15
 
 
 class RecommendationRow(BaseModel):
@@ -84,6 +90,11 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
             temperature=float(request.user_context.weather.temperature or 0.0),
             closet_items=[item.model_dump() for item in request.closet_items],
             top_k=int(request.top_k or 10),
+            alpha_tb=request.alpha_tb,
+            alpha_oi=request.alpha_oi,
+            mmr_lambda=request.mmr_lambda,
+            beta_tb=request.beta_tb,
+            lambda_tbset=request.lambda_tbset,
         )
         return RecommendResponse(
             selected_items=result.get("selected_items", {}),

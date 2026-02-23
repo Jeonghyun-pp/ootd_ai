@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRepository } from "@/lib/db/repository";
 import type { ClosetItem } from "@/lib/types/closet";
+import {
+  type Hyperparams,
+  getHyperparams,
+  saveRecommendation,
+} from "@/lib/db/hyperparams-repository";
 
 const repository = getRepository();
 
@@ -40,6 +45,31 @@ type MLResult = {
   recommendations: UIRecommendation[];
 };
 
+// ── 하이퍼파라미터 노이즈 유틸리티 ─────────────────────────────────
+function gaussNoise(sigma: number): number {
+  // Box-Muller 변환으로 가우시안 노이즈 샘플링
+  const u = 1 - Math.random();
+  const v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * sigma;
+}
+
+function clip(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function sampleHyperparams(baseline: Hyperparams): Hyperparams {
+  const s = baseline.sigma;
+  return {
+    alpha_tb:     clip(baseline.alpha_tb     + gaussNoise(s), 0.20, 0.95),
+    alpha_oi:     clip(baseline.alpha_oi     + gaussNoise(s), 0.20, 0.95),
+    mmr_lambda:   clip(baseline.mmr_lambda   + gaussNoise(s), 0.30, 0.95),
+    beta_tb:      clip(baseline.beta_tb      + gaussNoise(s), 0.20, 0.80),
+    lambda_tbset: clip(baseline.lambda_tbset + gaussNoise(s), 0.00, 0.30),
+    sigma: baseline.sigma,
+    eta:   baseline.eta,
+  };
+}
+
 /**
  * POST /api/recommend
  * 1) ML server recommendation
@@ -65,17 +95,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 하이퍼파라미터 기준점 로드 → 노이즈 샘플링
+    const baseline = await getHyperparams();
+    const usedHyperparams = sampleHyperparams(baseline);
+
     const mlResult = await tryMLRecommendation(
       mood,
       comment,
       temperature,
       feelsLike,
       precipitation,
-      allItems
+      allItems,
+      usedHyperparams,
     );
 
     if (mlResult && mlResult.recommendations.length > 0) {
+      // 추천 결과 + 사용 파라미터를 history에 저장
+      const recId = await saveRecommendation({
+        mood,
+        weather_data: { temperature, feelsLike, precipitation },
+        recommended_items: mlResult.recommendations,
+        hyperparams_used: usedHyperparams,
+      }).catch(() => null); // 저장 실패해도 추천 결과는 반환
+
       return NextResponse.json({
+        recommendation_id: recId,
         selectedItems: mlResult.selectedItems,
         recommendations: mlResult.recommendations,
       });
@@ -87,6 +131,7 @@ export async function POST(request: NextRequest) {
       allItems
     );
     return NextResponse.json({
+      recommendation_id: null,
       selectedItems: fallback.selectedItems,
       recommendations: fallback.recommendations,
     });
@@ -108,7 +153,8 @@ async function tryMLRecommendation(
   temperature: number | undefined,
   feelsLike: number | undefined,
   precipitation: number | undefined,
-  allItems: ClosetItem[]
+  allItems: ClosetItem[],
+  hyperparams: Hyperparams,
 ): Promise<MLResult | null> {
   try {
     // Optional narrowing. If vector services are unavailable, continue with all items.
@@ -146,6 +192,12 @@ async function tryMLRecommendation(
           season: item.season,
         })),
         top_k: 10,
+        // 이번 추천에 사용할 (노이즈가 추가된) 하이퍼파라미터
+        alpha_tb:     hyperparams.alpha_tb,
+        alpha_oi:     hyperparams.alpha_oi,
+        mmr_lambda:   hyperparams.mmr_lambda,
+        beta_tb:      hyperparams.beta_tb,
+        lambda_tbset: hyperparams.lambda_tbset,
       }),
       signal: controller.signal,
     });

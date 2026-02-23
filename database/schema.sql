@@ -79,3 +79,21 @@ CREATE TABLE recommendation_history (
 );
 
 CREATE INDEX idx_recommendation_history_created_at ON recommendation_history(created_at DESC);
+
+-- 하이퍼파라미터 기준점 저장 (단일 행 싱글톤)
+CREATE TABLE user_hyperparams (
+    id           UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
+    alpha_tb     FLOAT DEFAULT 0.65,   -- top-bottom 색상 vs 임베딩 비중
+    alpha_oi     FLOAT DEFAULT 0.70,   -- outer-inner 색상 vs 임베딩 비중
+    mmr_lambda   FLOAT DEFAULT 0.75,   -- MMR quality vs diversity
+    beta_tb      FLOAT DEFAULT 0.50,   -- outer-top vs outer-bottom 균형
+    lambda_tbset FLOAT DEFAULT 0.15,   -- inner 응집력 반영 비중
+    sigma        FLOAT DEFAULT 0.05,   -- 탐색 노이즈 표준편차
+    eta          FLOAT DEFAULT 0.10,   -- 학습률 (기준점 갱신 폭)
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO user_hyperparams DEFAULT VALUES;
+
+-- recommendation_history: 해당 추천에 사용된 하이퍼파라미터 기록
+ALTER TABLE recommendation_history
+    ADD COLUMN IF NOT EXISTS hyperparams_used JSONB;
