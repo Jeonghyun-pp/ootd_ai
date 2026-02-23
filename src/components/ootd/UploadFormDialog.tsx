@@ -64,11 +64,13 @@ export default function UploadFormDialog({
           {/* 이미지 미리보기 */}
           <div className="aspect-[4/5] overflow-hidden rounded-xl border border-border/60">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={previewUrl}
-              alt="업로드 미리보기"
-              className="h-full w-full object-cover"
-            />
+            {previewUrl && (
+              <img
+                src={previewUrl}
+                alt="업로드 미리보기"
+                className="h-full w-full object-cover"
+              />
+            )}
           </div>
 
           {/* 입력 폼 */}
