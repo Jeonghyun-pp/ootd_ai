@@ -6,21 +6,25 @@ import { type ClosetItemView, getCategoryLabel } from "@/lib/types/closet-view";
 interface ClosetItemCardProps {
   item: ClosetItemView;
   selected: boolean;
+  highlighted?: boolean;
   onClick: () => void;
 }
 
 export default function ClosetItemCard({
   item,
   selected,
+  highlighted,
   onClick,
 }: ClosetItemCardProps) {
   return (
     <button
       onClick={onClick}
       className={`group relative overflow-hidden rounded-2xl bg-white text-left transition-all duration-300 ease-out notion-hover ${
-        selected
-          ? "ring-2 ring-primary shadow-lg shadow-primary/20 scale-[1.02]"
-          : "ring-1 ring-border/60 hover:ring-border hover:shadow-md"
+        highlighted
+          ? "ring-2 ring-green-400 shadow-lg shadow-green-200/40 scale-[1.02] animate-pulse"
+          : selected
+            ? "ring-2 ring-primary shadow-lg shadow-primary/20 scale-[1.02]"
+            : "ring-1 ring-border/60 hover:ring-border hover:shadow-md"
       }`}
     >
       <div className="aspect-[4/5] w-full overflow-hidden rounded-t-2xl">

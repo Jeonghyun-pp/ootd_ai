@@ -14,8 +14,10 @@ COPY ml-server/app/ ./app/
 
 # Copy model artifacts
 COPY model/artifacts.pt ./model/artifacts.pt
+COPY ml-server/app/efficientnet_kfashion_best.pt ./app/efficientnet_kfashion_best.pt
 
 ENV ARTIFACTS_PATH=/app/model/artifacts.pt
+ENV EFFNET_MODEL_PATH=/app/app/efficientnet_kfashion_best.pt
 
 EXPOSE 8000
 

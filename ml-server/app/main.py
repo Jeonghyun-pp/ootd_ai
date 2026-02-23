@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import io
 import os
 from typing import Any, Dict, List, Optional, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .model_loader import ArtifactsBundle, load_artifacts
 from .predictor import recommend_outfits
+from .efficientnet_classifier import EfficientNetClassifier
 
 
 app = FastAPI(title="OOTD Recommendation API")
 
 artifacts: Optional[ArtifactsBundle] = None
+classifier: Optional[EfficientNetClassifier] = None
 
 
 class WeatherPayload(BaseModel):
@@ -58,13 +62,26 @@ class RecommendResponse(BaseModel):
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    global artifacts
+    global artifacts, classifier
     artifacts_path = (
         os.getenv("ARTIFACTS_PATH")
         or os.getenv("MODEL_ARTIFACTS_PATH")
         or None
     )
     artifacts = load_artifacts(artifacts_path=artifacts_path)
+
+    # EfficientNet 이미지 분석 모델 로드
+    effnet_path = os.getenv("EFFNET_MODEL_PATH", "ml-server/app/efficientnet_kfashion_best.pt")
+    if not os.path.exists(effnet_path):
+        # Docker 배포 시 경로
+        effnet_path = "/app/app/efficientnet_kfashion_best.pt"
+    if os.path.exists(effnet_path):
+        try:
+            classifier = EfficientNetClassifier(effnet_path)
+        except Exception as exc:
+            print(f"EfficientNet 로드 실패: {exc}")
+    else:
+        print(f"EfficientNet 모델 파일 없음: {effnet_path}")
 
 
 @app.post("/recommend", response_model=RecommendResponse)
@@ -93,11 +110,83 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+PART_TO_CATEGORY = {
+    "top": "top",
+    "bottom": "bottom",
+    "outer": "outer",
+    "dress": "dress",
+}
+
+
+@app.post("/analyze")
+async def analyze(image: UploadFile = File(...)) -> Dict[str, Any]:
+    """이미지 분석 → 의류 속성 반환 (upload/route.ts 호환)"""
+    if classifier is None:
+        raise HTTPException(status_code=503, detail="EfficientNet model not loaded")
+
+    try:
+        contents = await image.read()
+        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"이미지 읽기 실패: {exc}") from exc
+
+    try:
+        # 기본 yolo_category = 'top' (YOLO 미사용 시)
+        result = classifier.classify(pil_image, yolo_category="top")
+
+        # sub_type에서 카테고리 역추론 (카테고리→part 매핑)
+        sub_type = result.get("sub_type", "")
+        from .efficientnet_classifier import YOLO_TO_KR
+        # sub_type 기반으로 part 추론
+        category = _infer_category_from_sub_type(sub_type)
+
+        return {
+            "category": category,
+            "detection_confidence": result.get("sub_type_confidence", 0.5),
+            "sub_type": sub_type,
+            "sub_type_confidence": result.get("sub_type_confidence"),
+            "color": result.get("color"),
+            "color_confidence": result.get("color_confidence"),
+            "sub_color": result.get("sub_color"),
+            "sub_color_confidence": result.get("sub_color_confidence"),
+            "sleeve_length": result.get("sleeve_length"),
+            "sleeve_length_confidence": result.get("sleeve_length_confidence"),
+            "length": result.get("length"),
+            "length_confidence": result.get("length_confidence"),
+            "fit": result.get("fit"),
+            "fit_confidence": result.get("fit_confidence"),
+            "collar": result.get("collar"),
+            "collar_confidence": result.get("collar_confidence"),
+            "material": result.get("material"),
+            "print": result.get("print"),
+            "detail": result.get("detail"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# sub_type(카테고리) → part(top/bottom/outer/dress) 매핑
+_SUB_TYPE_TO_PART = {
+    "티셔츠": "top", "셔츠": "top", "블라우스": "top", "니트웨어": "top",
+    "후드티": "top", "탑": "top", "브라탑": "top",
+    "팬츠": "bottom", "청바지": "bottom", "스커트": "bottom",
+    "조거팬츠": "bottom", "래깅스": "bottom",
+    "재킷": "outer", "점퍼": "outer", "코트": "outer", "패딩": "outer",
+    "가디건": "outer", "짚업": "outer", "베스트": "outer",
+    "드레스": "dress", "점프수트": "dress",
+}
+
+
+def _infer_category_from_sub_type(sub_type: str) -> str:
+    return _SUB_TYPE_TO_PART.get(sub_type, "top")
+
+
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "model_loaded": artifacts is not None,
+        "classifier_loaded": classifier is not None,
         "feature_cols": artifacts.feature_cols if artifacts else [],
     }
 

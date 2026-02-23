@@ -38,11 +38,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 사용자 입력 속성 읽기
+    const userCategory = formData.get("category") as string | null;
+    const userColor = formData.get("color") as string | null;
+    const userSubType = formData.get("sub_type") as string | null;
+
     // 1. Cloudinary에 이미지 업로드
     const imageUrl = await uploadImageToCloudinary(file);
 
-    // 2. ML 분석 서버 호출 (fallback 포함)
-    const attributes = await analyzeImage(file);
+    // 2. 속성 결정: 사용자 입력 우선, 없으면 ML 분석
+    let attributes: ClosetItemAttributes;
+    let mlSucceeded = false;
+
+    if (userCategory && userColor) {
+      // 사용자가 직접 입력한 속성 사용
+      attributes = {
+        category: userCategory as ClosetItemAttributes["category"],
+        detection_confidence: 1.0,
+        color: userColor,
+        sub_type: userSubType || undefined,
+      };
+    } else {
+      // ML 분석 서버 호출 (fallback 포함)
+      const analysis = await analyzeImage(file);
+      attributes = analysis.attributes;
+      mlSucceeded = analysis.mlSucceeded;
+    }
 
     // 이름 생성
     const name =
@@ -72,6 +93,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         item: newItem,
+        analysis: {
+          mlAvailable: mlSucceeded,
+          confidence: attributes.detection_confidence,
+          fallback: !mlSucceeded,
+        },
         message: "옷장 아이템이 등록되었습니다.",
       },
       { status: 201 }
@@ -108,13 +134,15 @@ async function uploadImageToCloudinary(file: File): Promise<string> {
 /**
  * ML 분석 서버 호출 (fallback: 기본 attributes)
  */
-async function analyzeImage(file: File): Promise<ClosetItemAttributes> {
+async function analyzeImage(
+  file: File
+): Promise<{ attributes: ClosetItemAttributes; mlSucceeded: boolean }> {
   try {
     const formData = new FormData();
     formData.append("image", file);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
     const response = await fetch(`${IMAGE_ANALYSIS_MODEL_URL}/analyze`, {
       method: "POST",
@@ -128,14 +156,17 @@ async function analyzeImage(file: File): Promise<ClosetItemAttributes> {
       throw new Error(`분석 서버 응답 오류: ${response.status}`);
     }
 
-    return response.json();
+    return { attributes: await response.json(), mlSucceeded: true };
   } catch (error) {
     console.warn("ML 분석 서버 호출 실패, fallback 사용:", error);
     return {
-      category: "top",
-      detection_confidence: 0.5,
-      sub_type: "기타",
-      color: "기타",
+      attributes: {
+        category: "top",
+        detection_confidence: 0.5,
+        sub_type: "기타",
+        color: "기타",
+      },
+      mlSucceeded: false,
     };
   }
 }
