@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRepository } from "@/lib/db/repository";
 import type { ClosetItem } from "@/lib/types/closet";
+import {
+  type Hyperparams,
+  getHyperparams,
+  saveRecommendation,
+} from "@/lib/db/hyperparams-repository";
 
 const repository = getRepository();
 
@@ -40,6 +45,30 @@ type MLResult = {
   recommendations: UIRecommendation[];
 };
 
+// ── 하이퍼파라미터 노이즈 유틸리티 ─────────────────────────────────
+function gaussNoise(sigma: number): number {
+  const u = 1 - Math.random();
+  const v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * sigma;
+}
+
+function clip(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function sampleHyperparams(baseline: Hyperparams): Hyperparams {
+  const s = baseline.sigma;
+  return {
+    alpha_tb: clip(baseline.alpha_tb + gaussNoise(s), 0.2, 0.95),
+    alpha_oi: clip(baseline.alpha_oi + gaussNoise(s), 0.2, 0.95),
+    mmr_lambda: clip(baseline.mmr_lambda + gaussNoise(s), 0.3, 0.95),
+    beta_tb: clip(baseline.beta_tb + gaussNoise(s), 0.2, 0.8),
+    lambda_tbset: clip(baseline.lambda_tbset + gaussNoise(s), 0.0, 0.3),
+    sigma: baseline.sigma,
+    eta: baseline.eta,
+  };
+}
+
 /**
  * POST /api/recommend
  * 1) ML server recommendation
@@ -48,7 +77,7 @@ type MLResult = {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { mood, comment, temperature, feelsLike, precipitation } = body;
+    const { mood, temperature, feelsLike, precipitation } = body;
 
     if (!mood || mood.length < 3) {
       return NextResponse.json(
@@ -65,17 +94,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 하이퍼파라미터 기준점 로드 → 노이즈 샘플링
+    const baseline = await getHyperparams();
+    const usedHyperparams = sampleHyperparams(baseline);
+
     const mlResult = await tryMLRecommendation(
       mood,
-      comment,
       temperature,
       feelsLike,
       precipitation,
-      allItems
+      allItems,
+      usedHyperparams
     );
 
     if (mlResult && mlResult.recommendations.length > 0) {
+      // 추천 결과 + 사용 파라미터를 history에 저장
+      const recId = await saveRecommendation({
+        mood,
+        weather_data: { temperature, feelsLike, precipitation },
+        recommended_items: mlResult.recommendations,
+        hyperparams_used: usedHyperparams,
+      }).catch(() => null);
+
       return NextResponse.json({
+        recommendation_id: recId,
         selectedItems: mlResult.selectedItems,
         recommendations: mlResult.recommendations,
       });
@@ -87,6 +129,7 @@ export async function POST(request: NextRequest) {
       allItems
     );
     return NextResponse.json({
+      recommendation_id: null,
       selectedItems: fallback.selectedItems,
       recommendations: fallback.recommendations,
     });
@@ -104,17 +147,17 @@ export async function POST(request: NextRequest) {
 
 async function tryMLRecommendation(
   mood: string,
-  comment: string | undefined,
   temperature: number | undefined,
   feelsLike: number | undefined,
   precipitation: number | undefined,
-  allItems: ClosetItem[]
+  allItems: ClosetItem[],
+  hyperparams: Hyperparams
 ): Promise<MLResult | null> {
   try {
     // Optional narrowing. If vector services are unavailable, continue with all items.
     let candidateItems = allItems;
     try {
-      const textVector = await encodeTextToVector(mood, comment);
+      const textVector = await encodeTextToVector(mood);
       const similarItems = await repository.findSimilar(textVector, 100);
       if (similarItems.length > 0) {
         candidateItems = similarItems;
@@ -132,7 +175,7 @@ async function tryMLRecommendation(
       body: JSON.stringify({
         user_context: {
           text: mood,
-          comment: comment || "",
+          comment: "",
           weather: {
             temperature: temperature || 0,
             feels_like: feelsLike || 0,
@@ -146,6 +189,11 @@ async function tryMLRecommendation(
           season: item.season,
         })),
         top_k: 10,
+        alpha_tb: hyperparams.alpha_tb,
+        alpha_oi: hyperparams.alpha_oi,
+        mmr_lambda: hyperparams.mmr_lambda,
+        beta_tb: hyperparams.beta_tb,
+        lambda_tbset: hyperparams.lambda_tbset,
       }),
       signal: controller.signal,
     });
@@ -238,10 +286,9 @@ async function tryMLRecommendation(
 }
 
 async function encodeTextToVector(
-  text: string,
-  comment?: string
+  text: string
 ): Promise<number[]> {
-  const combinedText = comment ? `${text} ${comment}` : text;
+  const combinedText = text;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
