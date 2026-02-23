@@ -20,12 +20,14 @@ interface ClosetGridProps {
   items: ClosetItemView[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  highlightId?: string | null;
 }
 
 export default function ClosetGrid({
   items,
   selectedId,
   onSelect,
+  highlightId,
 }: ClosetGridProps) {
   const [dialogItem, setDialogItem] = useState<ClosetItemView | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -101,6 +103,7 @@ export default function ClosetGrid({
             key={item.id}
             item={item}
             selected={selectedId === item.id}
+            highlighted={highlightId === item.id}
             onClick={() => handleClick(item)}
           />
         ))}

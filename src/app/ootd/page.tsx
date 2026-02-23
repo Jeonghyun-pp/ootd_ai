@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { RotateCcw, Wand2, Loader2 } from "lucide-react";
+import { RotateCcw, Wand2, Loader2, Plus } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,9 @@ import RecommendationResult, {
   type RecommendationItem,
 } from "@/components/ootd/RecommendationResult";
 import Footer from "@/components/landing/Footer";
+import UploadFormDialog, {
+  type UploadFormData,
+} from "@/components/ootd/UploadFormDialog";
 
 import type { ClosetItemView } from "@/lib/types/closet-view";
 
@@ -42,6 +45,9 @@ export default function OotdPage() {
   const [selectedItems, setSelectedItems] =
     useState<SelectedItemsByCategory | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [newlyUploadedId, setNewlyUploadedId] = useState<string | null>(null);
+  const [showUploadForm, setShowUploadForm] = useState(false);
 
   // 옷장 데이터 상태
   const [closetItems, setClosetItems] = useState<ClosetItemView[]>([]);
@@ -221,16 +227,20 @@ export default function OotdPage() {
     }
   }
 
-  async function handleUploadToCloset() {
-    if (!ootdFile) return;
+  async function handleUploadToCloset(formData: UploadFormData) {
+    if (!ootdFile || isUploading) return;
 
+    setIsUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("image", ootdFile);
+      const body = new FormData();
+      body.append("image", ootdFile);
+      body.append("category", formData.category);
+      body.append("color", formData.color);
+      if (formData.subType) body.append("sub_type", formData.subType);
 
       const res = await fetch("/api/closet/upload", {
         method: "POST",
-        body: formData,
+        body,
       });
 
       if (!res.ok) {
@@ -238,12 +248,30 @@ export default function OotdPage() {
         throw new Error(errData.error || "업로드 실패");
       }
 
-      toast.success("옷장에 아이템이 추가되었습니다!");
+      const data = await res.json();
+
+      toast.success("옷장에 아이템이 추가되었습니다!", {
+        description: data.item?.name
+          ? `"${data.item.name}" 등록 완료`
+          : undefined,
+      });
+
+      // 새로 업로드된 아이템 하이라이트
+      if (data.item?.id) {
+        setNewlyUploadedId(data.item.id);
+        setTimeout(() => setNewlyUploadedId(null), 3000);
+      }
+
+      setShowUploadForm(false);
       handleRemoveImage();
       fetchCloset(); // 옷장 새로고침
     } catch (err) {
       console.error("Upload error:", err);
-      toast.error("업로드에 실패했습니다.");
+      toast.error("업로드에 실패했습니다.", {
+        description: err instanceof Error ? err.message : "다시 시도해주세요.",
+      });
+    } finally {
+      setIsUploading(false);
     }
   }
 
@@ -304,11 +332,12 @@ export default function OotdPage() {
                   {/* Upload to closet button */}
                   {ootdFile && (
                     <Button
-                      variant="outline"
+                      variant="default"
                       size="sm"
-                      className="w-full rounded-xl"
-                      onClick={handleUploadToCloset}
+                      className="w-full rounded-xl gap-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-md"
+                      onClick={() => setShowUploadForm(true)}
                     >
+                      <Plus className="size-4" />
                       옷장에 추가하기
                     </Button>
                   )}
@@ -358,6 +387,7 @@ export default function OotdPage() {
                         items={closetItems}
                         selectedId={selectedClosetItemId}
                         onSelect={setSelectedClosetItemId}
+                        highlightId={newlyUploadedId}
                       />
                     )}
                   </div>
@@ -412,6 +442,14 @@ export default function OotdPage() {
           )}
         </div>
       </div>
+
+      <UploadFormDialog
+        open={showUploadForm}
+        onOpenChange={setShowUploadForm}
+        previewUrl={previewUrl}
+        loading={isUploading}
+        onSubmit={handleUploadToCloset}
+      />
 
       <Footer />
     </div>
