@@ -1,23 +1,31 @@
-FROM python:3.10-slim
+FROM python:3.10-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Install CPU-only PyTorch first (saves ~1.5GB vs full torch)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
-# Install remaining dependencies
 COPY ml-server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Runtime ──────────────────────────────────────────────────
+FROM python:3.10-slim
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
 
 # Copy application code
 COPY ml-server/app/ ./app/
 
-# Copy model artifacts
-COPY model/artifacts.pt ./model/artifacts.pt
-COPY ml-server/app/efficientnet_kfashion_best.pt ./app/efficientnet_kfashion_best.pt
+# Copy model artifacts (ONNX + config + embeddings)
+COPY model/artifacts_config.json ./model/artifacts_config.json
+COPY model/text_encoder.onnx     ./model/text_encoder.onnx
+COPY model/item_encoder.onnx     ./model/item_encoder.onnx
+COPY model/item_embs.npy         ./model/item_embs.npy
 
-ENV ARTIFACTS_PATH=/app/model/artifacts.pt
-ENV EFFNET_MODEL_PATH=/app/app/efficientnet_kfashion_best.pt
+ENV ARTIFACTS_PATH=/app/model/artifacts_config.json
+ENV EFFNET_MODEL_PATH=/app/app/efficientnet_kfashion.onnx
 
 EXPOSE 8000
 

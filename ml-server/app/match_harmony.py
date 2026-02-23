@@ -5,7 +5,7 @@ Match harmony scoring for outfit recommendation.
 최종 코디 세트를 추천합니다. MMR(Maximal Marginal Relevance)로 다양성을 확보합니다.
 """
 
-import torch
+import numpy as np
 from typing import Dict, List, Optional, Set
 
 from .color_harmony import (
@@ -19,31 +19,27 @@ from .color_harmony import (
 # ---------------------------------------------------------------------------
 # Constants & Hyperparameters
 # ---------------------------------------------------------------------------
-# alpha=1 -> 색만 봄 / alpha=0 -> 임베딩만 봄
-ALPHA_TB = 0.65       # top-bottom 조합 시 색상 조화 비중
-ALPHA_OI = 0.70       # outer-inner 조합 시 색상 조화 비중
-BETA_TB = 0.50        # outer-(top/bottom) 균형: 0.5면 top/bottom 동일 가중
-LAMBDA_TBSET = 0.15   # inner(tbset 응집력)를 outer 매칭 점수에 반영하는 비중
+ALPHA_TB = 0.65
+ALPHA_OI = 0.70
+BETA_TB = 0.50
+LAMBDA_TBSET = 0.15
 
-MMR_LAMBDA = 0.75        # MMR quality vs diversity 비중 (0.75 권장)
-MMR_MAX_CANDIDATES = 400  # MMR 대상 후보 수
+MMR_LAMBDA = 0.75
+MMR_MAX_CANDIDATES = 400
 
 # ---------------------------------------------------------------------------
 # Embedding Utility Functions
 # ---------------------------------------------------------------------------
 
 def build_emb_by_id(
-    item_embs: torch.Tensor,
+    item_embs: np.ndarray,
     item_metas: Optional[List[dict]] = None,
     item_ids: Optional[List[str]] = None,
     eps: float = 1e-12,
-) -> Dict[str, torch.Tensor]:
-    """
-    item_id를 키로 하고 L2-정규화된 임베딩 벡터를 값으로 하는 딕셔너리를 생성합니다.
-    이 딕셔너리는 실시간 코사인 유사도 계산에 사용됩니다.
-    """
-    x = item_embs.detach().to("cpu").float()
-    x = x / (x.norm(dim=1, keepdim=True) + eps)
+) -> Dict[str, np.ndarray]:
+    x = item_embs.astype(np.float32)
+    norms = np.linalg.norm(x, axis=1, keepdims=True) + eps
+    x = x / norms
 
     if item_ids is None:
         if item_metas is None:
@@ -58,38 +54,32 @@ def build_emb_by_id(
     return {str(iid): x[i] for i, iid in enumerate(item_ids)}
 
 
-def emb_sim_01(iid1: str, iid2: str, emb_by_id: Dict[str, torch.Tensor]) -> float:
-    """코사인 유사도를 [-1,1] → [0,1]로 변환. 임베딩 없으면 중립값(0.5) 반환."""
+def emb_sim_01(iid1: str, iid2: str, emb_by_id: Dict[str, np.ndarray]) -> float:
     if emb_by_id is None:
         return 0.5
     e1 = emb_by_id.get(str(iid1))
     e2 = emb_by_id.get(str(iid2))
     if e1 is None or e2 is None:
         return 0.5
-    sim = float((e1 * e2).sum().item())
+    sim = float(np.dot(e1, e2))
     return 0.5 * (sim + 1.0)
 
 
 def mix_score(color_s: float, emb_s01: float, alpha: float) -> float:
-    """색상 점수와 임베딩 점수를 alpha 비중으로 혼합합니다."""
     return float(alpha * color_s + (1.0 - alpha) * emb_s01)
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Top-Bottom set matching (색 + 임베딩 혼합)
+# Step 2: Top-Bottom set matching
 # ---------------------------------------------------------------------------
 
 def build_top_bottom_sets_with_emb(
     top_colors: List[ItemColorInfo],
     bottom_colors: List[ItemColorInfo],
-    emb_by_id: Dict[str, torch.Tensor],
+    emb_by_id: Dict[str, np.ndarray],
     L: int = 7,
     alpha_tb: float = ALPHA_TB,
 ) -> List[TopBottomSet]:
-    """
-    (상의_i, 하의_j) 전수조합에서 색 조화 + 임베딩 유사도 혼합 점수로 상위 L개 반환.
-    color_harmony.build_inner_candidates와 호환되는 TopBottomSet 타입으로 반환.
-    """
     combos: List[TopBottomSet] = []
     for t in top_colors:
         for b in bottom_colors:
@@ -103,29 +93,18 @@ def build_top_bottom_sets_with_emb(
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Outer-Inner scoring & final outfit building (색 + 임베딩 혼합)
+# Step 4: Outer-Inner scoring & final outfit building
 # ---------------------------------------------------------------------------
 
 def _outer_inner_score_with_emb(
     outer: ItemColorInfo,
     inner: InnerCandidate,
     color_index: Dict[str, ItemColorInfo],
-    emb_by_id: Dict[str, torch.Tensor],
+    emb_by_id: Dict[str, np.ndarray],
     alpha_oi: float = ALPHA_OI,
     beta_tb: float = BETA_TB,
     lambda_tbset: float = LAMBDA_TBSET,
 ) -> float:
-    """
-    outer × inner 조합 점수 = 색 조화 + 임베딩 유사도 혼합.
-
-    dress:
-        S = mix(color(outer, dress), emb(outer, dress); alpha_oi)
-
-    two_piece:
-        S_ot = mix(color(outer, top),    emb(outer, top);    alpha_oi)
-        S_ob = mix(color(outer, bottom), emb(outer, bottom); alpha_oi)
-        S = beta_tb * S_ot + (1 - beta_tb) * S_ob + lambda_tbset * inner.inner_harmony
-    """
     if inner.kind == "dress":
         op = color_index[inner.ids[0]]
         c = harmony_score_lab(outer.lab, op.lab)
@@ -158,16 +137,12 @@ def build_final_outfits_with_match(
     outer_colors: List[ItemColorInfo],
     inner_candidates: List[InnerCandidate],
     color_index: Dict[str, ItemColorInfo],
-    emb_by_id: Dict[str, torch.Tensor],
+    emb_by_id: Dict[str, np.ndarray],
     M: int = 10,
     alpha_oi: float = ALPHA_OI,
     beta_tb: float = BETA_TB,
     lambda_tbset: float = LAMBDA_TBSET,
 ) -> List[FinalOutfit]:
-    """
-    outer × inner 전수조합에서 혼합 점수 기준 상위 M*2개 반환.
-    (apply_mmr_reranking 적용을 위해 여유 있게 반환)
-    """
     all_combos: List[FinalOutfit] = []
     for o in outer_colors:
         for inner in inner_candidates:
@@ -191,7 +166,6 @@ def build_final_outfits_with_match(
 # ---------------------------------------------------------------------------
 
 def _outfit_item_set(outfit: FinalOutfit) -> Set[str]:
-    """FinalOutfit의 아이템 ID 집합 반환 (Jaccard 유사도 계산용)."""
     s: Set[str] = set()
     if outfit.outer_id:
         s.add(str(outfit.outer_id))
@@ -219,10 +193,6 @@ def apply_mmr_reranking(
     max_candidates: int = MMR_MAX_CANDIDATES,
     minmax_normalize: bool = True,
 ) -> List[FinalOutfit]:
-    """
-    MMR 그리디 리랭킹으로 Top-M 선택.
-    objective: lamb * quality - (1 - lamb) * max_jaccard_dup
-    """
     if not outfits:
         return []
 

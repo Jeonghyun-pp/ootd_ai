@@ -70,18 +70,17 @@ async def startup_event() -> None:
     )
     artifacts = load_artifacts(artifacts_path=artifacts_path)
 
-    # EfficientNet 이미지 분석 모델 로드
-    effnet_path = os.getenv("EFFNET_MODEL_PATH", "ml-server/app/efficientnet_kfashion_best.pt")
+    # EfficientNet 이미지 분석 모델 로드 (ONNX)
+    effnet_path = os.getenv("EFFNET_MODEL_PATH", "ml-server/app/efficientnet_kfashion.onnx")
     if not os.path.exists(effnet_path):
-        # Docker 배포 시 경로
-        effnet_path = "/app/app/efficientnet_kfashion_best.pt"
+        effnet_path = "/app/app/efficientnet_kfashion.onnx"
     if os.path.exists(effnet_path):
         try:
             classifier = EfficientNetClassifier(effnet_path)
         except Exception as exc:
-            print(f"EfficientNet 로드 실패: {exc}")
+            print(f"EfficientNet load failed: {exc}")
     else:
-        print(f"EfficientNet 모델 파일 없음: {effnet_path}")
+        print(f"EfficientNet model not found: {effnet_path}")
 
 
 @app.post("/recommend", response_model=RecommendResponse)
