@@ -1,3 +1,5 @@
+import { getDb } from "@/lib/db/neon-client";
+
 type RecommendationLike = {
   score: number;
   top?: { id?: string };
@@ -21,7 +23,6 @@ type ExposurePenaltyOptions = {
 };
 
 const DEFAULT_OPTIONS: Required<ExposurePenaltyOptions> = {
-  // Keep more history and decay by recommendation count.
   lookbackRecommendations: 40,
   penaltyPerHit: 0.08,
   maxPenalty: 0.6,
@@ -30,14 +31,6 @@ const DEFAULT_OPTIONS: Required<ExposurePenaltyOptions> = {
   recencyBoostRecommendations: 3,
   recencyBoostMultiplier: 1.8,
 };
-
-type RecommendationSnapshot = {
-  recommendations: RecommendationLike[];
-};
-
-// In-memory history per server process.
-// This is intentionally ephemeral: it resets on server restart/redeploy.
-const recentRecommendationHistory: RecommendationSnapshot[] = [];
 
 function extractItemIds(rec: RecommendationLike): string[] {
   const ids = new Set<string>();
@@ -55,14 +48,24 @@ function extractItemIds(rec: RecommendationLike): string[] {
   return Array.from(ids);
 }
 
-function getRecentExposureCountsFromMemory(
+async function getRecentExposureCountsFromDB(
   config: Required<ExposurePenaltyOptions>
-): Map<string, number> {
+): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   const lookback = Math.max(1, config.lookbackRecommendations);
-  const limitedHistory = recentRecommendationHistory.slice(0, lookback);
 
-  for (const [ageByRecommendation, snapshot] of limitedHistory.entries()) {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT recommended_items
+    FROM recommendation_history
+    ORDER BY created_at DESC
+    LIMIT ${lookback}
+  `;
+
+  for (const [ageByRecommendation, row] of rows.entries()) {
+    const items = row.recommended_items;
+    if (!Array.isArray(items)) continue;
+
     const stepDecay = Math.exp(
       (-Math.log(2) * ageByRecommendation) /
         Math.max(1, config.halfLifeRecommendations)
@@ -73,43 +76,14 @@ function getRecentExposureCountsFromMemory(
         : 1;
     const snapshotWeight = stepDecay * recencyBoost;
 
-    for (const rec of snapshot.recommendations) {
-      for (const itemId of extractItemIds(rec)) {
+    for (const rec of items) {
+      for (const itemId of extractItemIds(rec as RecommendationLike)) {
         counts.set(itemId, (counts.get(itemId) ?? 0) + snapshotWeight);
       }
     }
   }
 
   return counts;
-}
-
-function toHistoryShape(rec: RecommendationLike): RecommendationLike {
-  return {
-    score: rec.score,
-    top: rec.top?.id ? { id: rec.top.id } : undefined,
-    bottom: rec.bottom?.id ? { id: rec.bottom.id } : undefined,
-    dress: rec.dress?.id ? { id: rec.dress.id } : undefined,
-    outer: rec.outer?.id ? { id: rec.outer.id } : undefined,
-    top_id: rec.top_id,
-    bottom_id: rec.bottom_id,
-    dress_id: rec.dress_id,
-    outer_id: rec.outer_id,
-  };
-}
-
-export function rememberRecommendationsForExposure(
-  recommendations: RecommendationLike[],
-  historySize: number = DEFAULT_OPTIONS.lookbackRecommendations
-): void {
-  if (recommendations.length === 0) return;
-
-  const maxHistory = Math.max(1, historySize);
-  recentRecommendationHistory.unshift({
-    recommendations: recommendations.map((rec) => toHistoryShape(rec)),
-  });
-  if (recentRecommendationHistory.length > maxHistory) {
-    recentRecommendationHistory.length = maxHistory;
-  }
 }
 
 export async function rerankWithRecentExposurePenalty<T extends RecommendationLike>(
@@ -123,7 +97,7 @@ export async function rerankWithRecentExposurePenalty<T extends RecommendationLi
   const config = { ...DEFAULT_OPTIONS, ...options };
 
   try {
-    const exposure = getRecentExposureCountsFromMemory(config);
+    const exposure = await getRecentExposureCountsFromDB(config);
     if (exposure.size === 0) {
       return recommendations;
     }
