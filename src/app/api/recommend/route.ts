@@ -6,6 +6,10 @@ import {
   getHyperparams,
   saveRecommendation,
 } from "@/lib/db/hyperparams-repository";
+import {
+  rememberRecommendationsForExposure,
+  rerankWithRecentExposurePenalty,
+} from "@/lib/recommend/recent-exposure-penalty";
 
 const repository = getRepository();
 
@@ -108,18 +112,31 @@ export async function POST(request: NextRequest) {
     );
 
     if (mlResult && mlResult.recommendations.length > 0) {
+      const rerankedRecommendations = await rerankWithRecentExposurePenalty(
+        mlResult.recommendations,
+        {
+          lookbackRecommendations: 40,
+          penaltyPerHit: 0.08,
+          maxPenalty: 0.6,
+          halfLifeRecommendations: 8,
+          recencyBoostRecommendations: 3,
+          recencyBoostMultiplier: 1.8,
+        }
+      );
+      rememberRecommendationsForExposure(rerankedRecommendations, 60);
+
       // 추천 결과 + 사용 파라미터를 history에 저장
       const recId = await saveRecommendation({
         mood,
         weather_data: { temperature, feelsLike, precipitation },
-        recommended_items: mlResult.recommendations,
+        recommended_items: rerankedRecommendations,
         hyperparams_used: usedHyperparams,
       }).catch(() => null);
 
       return NextResponse.json({
         recommendation_id: recId,
         selectedItems: mlResult.selectedItems,
-        recommendations: mlResult.recommendations,
+        recommendations: rerankedRecommendations,
       });
     }
 
