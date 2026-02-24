@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     }
 
     // WeatherAPI.com API 호출
-    const apiUrl = `http://api.weatherapi.com/v1/current.json`;
+    const apiUrl = `https://api.weatherapi.com/v1/current.json`;
     
     const response = await fetch(
       `${apiUrl}?key=${apiKey}&q=${encodeURIComponent(location)}&lang=ko`

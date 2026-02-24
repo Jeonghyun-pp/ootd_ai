@@ -7,7 +7,6 @@ import {
   saveRecommendation,
 } from "@/lib/db/hyperparams-repository";
 import {
-  rememberRecommendationsForExposure,
   rerankWithRecentExposurePenalty,
 } from "@/lib/recommend/recent-exposure-penalty";
 
@@ -123,9 +122,7 @@ export async function POST(request: NextRequest) {
           recencyBoostMultiplier: 1.8,
         }
       );
-      rememberRecommendationsForExposure(rerankedRecommendations, 60);
-
-      // 추천 결과 + 사용 파라미터를 history에 저장
+      // 추천 결과 + 사용 파라미터를 history에 저장 (exposure penalty도 이 테이블을 참조)
       const recId = await saveRecommendation({
         mood,
         weather_data: { temperature, feelsLike, precipitation },
