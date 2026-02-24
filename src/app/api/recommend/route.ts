@@ -40,6 +40,19 @@ type MLResult = {
   recommendations: UIRecommendation[];
 };
 
+// ── CLIP 코사인 유사도 ────────────────────────────────────────────
+function cosineSim(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot   += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+
 /**
  * POST /api/recommend
  * 1) ML server recommendation
@@ -113,8 +126,9 @@ async function tryMLRecommendation(
   try {
     // Optional narrowing. If vector services are unavailable, continue with all items.
     let candidateItems = allItems;
+    let textVector: number[] | null = null;
     try {
-      const textVector = await encodeTextToVector(mood, comment);
+      textVector = await encodeTextToVector(mood, comment);
       const similarItems = await repository.findSimilar(textVector, 100);
       if (similarItems.length > 0) {
         candidateItems = similarItems;
@@ -144,6 +158,11 @@ async function tryMLRecommendation(
           vector: item.imageVector,
           attributes: item.attributes,
           season: item.season,
+          // CLIP 텍스트-이미지 유사도: ML 서버의 커스텀 vocab 인코더 대신 사용
+          clip_score:
+            textVector && item.imageVector
+              ? cosineSim(textVector, item.imageVector)
+              : null,
         })),
         top_k: 10,
       }),

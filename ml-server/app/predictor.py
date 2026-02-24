@@ -512,13 +512,31 @@ def recommend_outfits(
     if not prepared_items:
         return _empty
 
+    # CLIP 텍스트-이미지 유사도 사전 수집 (route.ts에서 계산된 값)
+    clip_scores: Dict[str, float] = {}
+    for item in closet_items:
+        cs = item.get("clip_score")
+        if cs is not None:
+            clip_scores[item.get("id", "")] = float(cs)
+
     item_embs = bundle.encode_items(feature_bucket)
-    text_emb = bundle.encode_text(query)
     emb_by_id = build_emb_by_id(item_embs, item_ids=[p.item_id for p in prepared_items])
 
-    similarities = (text_emb @ item_embs.T).squeeze(0)
+    # CLIP 스코어가 없는 아이템이 있을 경우에만 커스텀 텍스트 인코더 실행
+    has_fallback_items = any(p.item_id not in clip_scores for p in prepared_items)
+    if has_fallback_items:
+        text_emb = bundle.encode_text(query)
+        custom_similarities = (text_emb @ item_embs.T).squeeze(0)
+    else:
+        custom_similarities = None
+
     for idx, prepared in enumerate(prepared_items):
-        prepared.similarity = float(similarities[idx].item())
+        if prepared.item_id in clip_scores:
+            # CLIP 공간에서 계산된 텍스트-이미지 유사도 사용 (한국어 자유 입력 처리 가능)
+            prepared.similarity = clip_scores[prepared.item_id]
+        else:
+            # imageVector 없는 아이템: 커스텀 vocab 인코더로 fallback
+            prepared.similarity = float(custom_similarities[idx].item())
 
     temp_mask = []
     for prepared in prepared_items:

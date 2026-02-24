@@ -33,6 +33,7 @@ class ClosetItemPayload(BaseModel):
     attributes: Dict[str, Any] = Field(default_factory=dict)
     season: Optional[List[str]] = None
     dominant_color_lab: Optional[List[float]] = None  # Phase 2: pre-computed LAB
+    clip_score: Optional[float] = None  # CLIP 텍스트-이미지 유사도 (route.ts에서 계산)
 
 
 class RecommendRequest(BaseModel):
